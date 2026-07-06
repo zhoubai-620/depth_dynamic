@@ -1,0 +1,113 @@
+# Stage 2: Dynamic Obstacles with Ground Truth (Innovation 2 Validation)
+# Introduces dynamic obstacles but uses GROUND TRUTH positions for reward.
+# Skips perception module — obstacle_track uses DynamicObstacleManager GT.
+# Goal: Validate risk_field + new reward design converges before adding perception noise.
+#
+# curriculum_stage: "stage2_dynamic_gt" → env.get_reward() uses GT obstacle states.
+
+env_class: "dynamic_avoidance_env"
+
+env:
+  num_envs: 1
+  max_episode_steps: 256
+  visual: true
+  single_env: true
+  requires_grad: true
+  device: "cuda"
+  robot_radius: 0.1
+
+  action_type: "THRUST_YAW"
+  inertial_frame: "START"
+  target_type: "TARGET_VELOCITY_TARGET_DISTANCE"
+
+  dynamics_kwargs:
+    action_type: "thrust_start_frame"
+    ctrl_dt: 0.02
+    dt: 0.0025
+    grad_decay: 0.005
+    enable_air_drag: true
+    air_drag_theta_1: 0.1
+    air_drag_theta_2: 0.1
+    enable_ctrl_smoothing: true
+    exp_smoothing_factor: 12.0
+    vel_smoothing_factor: 0.5
+
+  reward_kwargs:
+    beta_1: 2.5
+    beta_2: -32
+    lambda_v: 1
+    lambda_c: 2
+    lambda_a: 0.01
+    lambda_j: 0.001
+    lambda_om: 0.03
+    lambda_yaw: 0.5
+    lambda_vmax: 0.0
+    lambda_risk: 1.0
+    lambda_track_conf: 0.0         # No confidence proxy yet
+    lambda_yaw_risk: 0.5
+    falloff_dis: 1.0
+    vel_thresh_slerp_yaw: 1.0
+
+  # --- Dynamic obstacle config ---
+  curriculum_stage: "stage2_dynamic_gt"    # GT mode
+  max_dynamic_obstacles: 4
+  ttc_threshold: 2.0
+  distance_safe: 1.5
+  use_confidence_proxy: false
+
+  scene_kwargs:
+    spawn_obstacles: true
+    load_geodesics: false          # No geodesic needed — TTC replaces it
+    num_obstacles: 10              # Fewer static obstacles (dynamic ones added)
+    obstacle_type: "cuboid"
+    obstacle_min_size: [0.2, 0.2, 0.2]
+    obstacle_max_size: [0.8, 0.8, 3.0]
+
+  sensor_kwargs:
+    - uuid: "depth"
+      sensor_type: "depth"
+      resolution: [64, 64]
+      near: 0.05
+      far: 20.0
+    - uuid: "color"
+      sensor_type: "color"
+      resolution: [64, 64]
+
+  # Dynamic obstacle configurations
+  dynamic_obstacles_config:
+    - initial_position: [5.0, -3.0, 2.0]
+      initial_velocity: [0.3, 0.5, 0.0]
+      motion_pattern: "constant_velocity"
+      radius: 0.3
+    - initial_position: [8.0, 3.0, 2.0]
+      initial_velocity: [-0.5, -0.3, 0.0]
+      motion_pattern: "sinusoidal"
+      motion_params:
+        axis: [1.0, 0.0, 0.0]
+        amplitude: 2.0
+        frequency: 0.3
+      radius: 0.3
+
+train_bptt:
+  iterations: 2000
+  horizon: 16                     # May need to reduce if gradient issues arise
+  gamma: 0.99
+  learning_rate_init: 3e-4
+  learning_rate_final: 1e-5
+  weight_decay: 0.0
+  log_interval: 10
+  checkpoint_interval: 500
+  early_stop_reward_threshold: -100.0
+
+policy_class: "MlpPolicy"         # Simple policy for GT validation (no perception)
+
+policy:
+  net_arch:
+    recurrent:
+      class: "LayerNormGRUCell"
+      kwargs:
+        hidden_size: 256
+    pi: [256, 128]
+    vf: [256, 128]
+  activation_fn: "relu"
+  output_activation_fn: "tanh"

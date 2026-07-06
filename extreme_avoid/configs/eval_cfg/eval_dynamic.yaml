@@ -1,0 +1,81 @@
+# Dynamic Avoidance Evaluation Configuration
+
+env_class: "dynamic_avoidance_env"
+
+env:
+  num_envs: 1
+  max_episode_steps: 256
+  visual: true
+  single_env: true
+  requires_grad: false
+  device: "cuda"
+  robot_radius: 0.1
+
+  action_type: "THRUST_YAW"
+  inertial_frame: "START"
+  target_type: "TARGET_VELOCITY_TARGET_DISTANCE"
+
+  dynamics_kwargs:
+    action_type: "thrust_start_frame"
+    ctrl_dt: 0.02
+    dt: 0.0025
+    enable_air_drag: true
+    air_drag_theta_1: 0.1
+    air_drag_theta_2: 0.1
+    enable_ctrl_smoothing: true
+
+  reward_kwargs:
+    beta_1: 2.5
+    beta_2: -32
+    lambda_v: 1
+    lambda_c: 2
+    lambda_a: 0.01
+    lambda_j: 0.001
+    lambda_om: 0.03
+    lambda_yaw: 0.3
+    lambda_risk: 1.0
+    lambda_track_conf: 0.5
+    lambda_yaw_risk: 0.5
+    falloff_dis: 1.0
+
+  curriculum_stage: "stage4_extreme"
+  max_dynamic_obstacles: 4
+  ttc_threshold: 2.0
+  distance_safe: 1.5
+  use_confidence_proxy: true
+  confidence_proxy_path: "./confidence_proxy.pth"
+
+  scene_kwargs:
+    spawn_obstacles: true
+    load_geodesics: false
+    num_obstacles: 10
+    obstacle_type: "cuboid"
+    obstacle_min_size: [0.2, 0.2, 0.2]
+    obstacle_max_size: [0.8, 0.8, 3.0]
+
+    # Evaluation scenes (held-out from training)
+    scene_id_offset: 100
+
+  sensor_kwargs:
+    - uuid: "depth"
+      sensor_type: "depth"
+      resolution: [64, 64]
+      near: 0.05
+      far: 20.0
+    - uuid: "color"
+      sensor_type: "color"
+      resolution: [64, 64]
+
+  dynamic_obstacles_config:
+    - initial_position: [5.0, -2.0, 2.0]
+      initial_velocity: [0.4, 0.6, 0.0]
+      motion_pattern: "constant_velocity"
+      radius: 0.3
+    - initial_position: [7.0, 2.0, 2.5]
+      initial_velocity: [-0.4, -0.4, 0.0]
+      motion_pattern: "sinusoidal"
+      motion_params:
+        axis: [0.0, 1.0, 0.0]
+        amplitude: 1.5
+        frequency: 0.3
+      radius: 0.3

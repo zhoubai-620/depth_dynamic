@@ -1,0 +1,180 @@
+# Stage 4: Extreme Environment (Full Innovation 1+2+3)
+# Full pipeline: perception + confidence_proxy + degraded lighting + more obstacles.
+# - Enables extreme lighting (low illumination for confidence proxy)
+# - Higher obstacle density
+# - Full TrackerFusedPolicy with motion_head and confidence proxy
+# - This is the final evaluation stage.
+
+env_class: "dynamic_avoidance_env"
+
+env:
+  num_envs: 1
+  max_episode_steps: 256
+  visual: true
+  single_env: true
+  requires_grad: true
+  device: "cuda"
+  robot_radius: 0.1
+
+  action_type: "THRUST_YAW"
+  inertial_frame: "START"
+  target_type: "TARGET_VELOCITY_TARGET_DISTANCE"
+
+  dynamics_kwargs:
+    action_type: "thrust_start_frame"
+    ctrl_dt: 0.02
+    dt: 0.0025
+    grad_decay: 0.003
+    enable_air_drag: true
+    air_drag_theta_1: 0.1
+    air_drag_theta_2: 0.1
+    enable_ctrl_smoothing: true
+    exp_smoothing_factor: 12.0
+    vel_smoothing_factor: 0.5
+
+  reward_kwargs:
+    beta_1: 2.5
+    beta_2: -32
+    lambda_v: 1
+    lambda_c: 2
+    lambda_a: 0.01
+    lambda_j: 0.001
+    lambda_om: 0.03
+    lambda_yaw: 0.3
+    lambda_vmax: 0.0
+    lambda_risk: 1.5                # Higher risk weight for dense obstacles
+    lambda_track_conf: 0.5          # Confidence proxy active
+    lambda_yaw_risk: 0.5
+    falloff_dis: 1.0
+
+  curriculum_stage: "stage4_extreme"
+  max_dynamic_obstacles: 6          # More obstacles
+  ttc_threshold: 2.5                # More conservative TTC
+  distance_safe: 2.0
+  use_confidence_proxy: true
+  confidence_proxy_path: "./confidence_proxy.pth"
+
+  scene_kwargs:
+    spawn_obstacles: true
+    load_geodesics: false
+    num_obstacles: 8
+    obstacle_type: "cuboid"
+    obstacle_min_size: [0.2, 0.2, 0.2]
+    obstacle_max_size: [0.8, 0.8, 3.0]
+
+  sensor_kwargs:
+    - uuid: "depth"
+      sensor_type: "depth"
+      resolution: [64, 64]
+      near: 0.05
+      far: 20.0
+    - uuid: "color"
+      sensor_type: "color"
+      resolution: [64, 64]
+
+  dynamic_obstacles_config:
+    - initial_position: [4.0, -4.0, 2.0]
+      initial_velocity: [0.5, 0.3, 0.0]
+      motion_pattern: "constant_velocity"
+      radius: 0.3
+    - initial_position: [6.0, 4.0, 2.0]
+      initial_velocity: [-0.3, -0.5, 0.1]
+      motion_pattern: "constant_velocity"
+      radius: 0.3
+    - initial_position: [9.0, 0.0, 2.5]
+      initial_velocity: [-0.2, 0.6, 0.0]
+      motion_pattern: "sinusoidal"
+      motion_params:
+        axis: [1.0, 0.0, 0.0]
+        amplitude: 3.0
+        frequency: 0.25
+      radius: 0.3
+    - initial_position: [3.0, 2.0, 1.5]
+      initial_velocity: [0.1, -0.4, 0.0]
+      motion_pattern: "trajectory_replay"
+      motion_params:
+        waypoints:
+          - [3.0, 2.0, 1.5]
+          - [5.0, -1.0, 2.0]
+          - [7.0, 3.0, 1.5]
+        loop: true
+        speed: 0.8
+      radius: 0.3
+
+train_bptt:
+  iterations: 5000
+  horizon: 10                     # Further reduced for stability with full pipeline
+  gamma: 0.99
+  learning_rate_init: 5e-5         # Lower LR for fine-tuning
+  learning_rate_final: 1e-6
+  weight_decay: 1e-5
+  log_interval: 10
+  checkpoint_interval: 500
+  early_stop_reward_threshold: -100.0
+
+policy_class: "TrackerFusedPolicy"
+
+policy:
+  net_arch:
+    recurrent:
+      class: "LayerNormGRUCell"
+      kwargs:
+        hidden_size: 256
+    pi: [256, 128]
+    vf: [256, 128]
+    concatenate: true
+    depth:
+      kernel_size: [5, 3, 3]
+      channels: [32, 64, 64]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [64]
+      ln: true
+    color:
+      kernel_size: [5, 3, 3]
+      channels: [16, 32, 32]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [32]
+      ln: true
+    state:
+      mlp_layer: [64]
+      ln: true
+    fused_backbone:
+      embed_dim: 192
+      max_obstacles: 6
+      embedding_dim: 64
+      dropout: 0.1
+    motion_head:
+      embedding_dim: 64
+      hidden_dims: [128, 64]
+      prediction_horizon: 5
+      dropout: 0.1
+  activation_fn: "relu"
+  output_activation_fn: "tanh"
+  feature_extractor_class: "TrackerFusedExtractor"
+  feature_extractor_kwargs:
+    net_arch:
+      concatenate: true
+      depth:
+        kernel_size: [5, 3, 3]
+        channels: [32, 64, 64]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [64]
+        ln: true
+      color:
+        kernel_size: [5, 3, 3]
+        channels: [16, 32, 32]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [32]
+        ln: true
+      state:
+        mlp_layer: [64]
+        ln: true
+      fused_backbone:
+        embed_dim: 192
+        max_obstacles: 6
+        embedding_dim: 64
+        dropout: 0.1

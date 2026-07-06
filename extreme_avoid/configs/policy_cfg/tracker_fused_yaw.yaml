@@ -1,0 +1,89 @@
+# TrackerFused Policy Configuration (Innovation 1)
+# Based on examples/navigation/policy_cfg/large_yaw.yaml template
+# Uses TrackerFusedExtractor for dual-prompt perception backbone
+
+policy_class: "TrackerFusedPolicy"
+feature_extractor_class: "TrackerFusedExtractor"
+
+policy:
+  net_arch:
+    # Recurrent layer (preserves obstacle history context for motion prediction)
+    recurrent:
+      class: "LayerNormGRUCell"
+      kwargs:
+        hidden_size: 256
+
+    # Policy network (after feature extraction + recurrent)
+    pi: [256, 128]
+    vf: [256, 128]
+
+    # Feature fusion mode: concatenate or elementwise add
+    concatenate: true
+
+    # Depth CNN branch (same as original)
+    depth:
+      kernel_size: [5, 3, 3]
+      channels: [32, 64, 64]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [64]
+      ln: true
+
+    # COLOR CNN branch (new — for fused backbone to consume)
+    color:
+      kernel_size: [5, 3, 3]
+      channels: [16, 32, 32]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [32]
+      ln: true
+
+    # State MLP
+    state:
+      mlp_layer: [64]
+      ln: true
+
+    # Fused backbone settings (Innovation 1)
+    fused_backbone:
+      embed_dim: 192
+      max_obstacles: 8
+      embedding_dim: 64
+      dropout: 0.1
+
+    # Motion head settings (Innovation 2)
+    motion_head:
+      embedding_dim: 64
+      hidden_dims: [128, 64]
+      prediction_horizon: 5
+      dropout: 0.1
+
+  # Activation functions
+  activation_fn: "relu"
+  output_activation_fn: "tanh"
+
+  # Feature extractor kwargs (passed to TrackerFusedExtractor)
+  feature_extractor_kwargs:
+    net_arch:
+      concatenate: true
+      depth:
+        kernel_size: [5, 3, 3]
+        channels: [32, 64, 64]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [64]
+        ln: true
+      color:
+        kernel_size: [5, 3, 3]
+        channels: [16, 32, 32]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [32]
+        ln: true
+      state:
+        mlp_layer: [64]
+        ln: true
+      fused_backbone:
+        embed_dim: 192
+        max_obstacles: 8
+        embedding_dim: 64
+        dropout: 0.1

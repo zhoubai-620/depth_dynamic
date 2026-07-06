@@ -1,0 +1,163 @@
+# Stage 3: Perception-Based Dynamic Avoidance (Innovation 1 + 2)
+# Switches from GT to real perception (TrackerFusedExtractor + FusedBackbone).
+# Expect performance drop vs stage2 — used to isolate perception vs reward issues.
+#
+# curriculum_stage: "stage3_perception" → uses policy aux_dict for obstacle states.
+
+env_class: "dynamic_avoidance_env"
+
+env:
+  num_envs: 1
+  max_episode_steps: 256
+  visual: true
+  single_env: true
+  requires_grad: true
+  device: "cuda"
+  robot_radius: 0.1
+
+  action_type: "THRUST_YAW"
+  inertial_frame: "START"
+  target_type: "TARGET_VELOCITY_TARGET_DISTANCE"
+
+  dynamics_kwargs:
+    action_type: "thrust_start_frame"
+    ctrl_dt: 0.02
+    dt: 0.0025
+    grad_decay: 0.003
+    enable_air_drag: true
+    air_drag_theta_1: 0.1
+    air_drag_theta_2: 0.1
+    enable_ctrl_smoothing: true
+    exp_smoothing_factor: 12.0
+    vel_smoothing_factor: 0.5
+
+  reward_kwargs:
+    beta_1: 2.5
+    beta_2: -32
+    lambda_v: 1
+    lambda_c: 2
+    lambda_a: 0.01
+    lambda_j: 0.001
+    lambda_om: 0.03
+    lambda_yaw: 0.3
+    lambda_vmax: 0.0
+    lambda_risk: 1.0
+    lambda_track_conf: 0.0         # Confidence proxy loaded but not yet active in reward
+    lambda_yaw_risk: 0.5
+    falloff_dis: 1.0
+
+  curriculum_stage: "stage3_perception"
+  max_dynamic_obstacles: 4
+  ttc_threshold: 2.0
+  distance_safe: 1.5
+  use_confidence_proxy: false      # Set true after collect+fit
+
+  scene_kwargs:
+    spawn_obstacles: true
+    load_geodesics: false
+    num_obstacles: 10
+    obstacle_type: "cuboid"
+    obstacle_min_size: [0.2, 0.2, 0.2]
+    obstacle_max_size: [0.8, 0.8, 3.0]
+
+  sensor_kwargs:
+    - uuid: "depth"
+      sensor_type: "depth"
+      resolution: [64, 64]
+      near: 0.05
+      far: 20.0
+    - uuid: "color"
+      sensor_type: "color"
+      resolution: [64, 64]
+
+  dynamic_obstacles_config:
+    - initial_position: [5.0, -3.0, 2.0]
+      initial_velocity: [0.3, 0.5, 0.0]
+      motion_pattern: "constant_velocity"
+      radius: 0.3
+    - initial_position: [8.0, 3.0, 2.0]
+      initial_velocity: [-0.5, -0.3, 0.0]
+      motion_pattern: "sinusoidal"
+      motion_params:
+        axis: [1.0, 0.0, 0.0]
+        amplitude: 2.0
+        frequency: 0.3
+      radius: 0.3
+
+train_bptt:
+  iterations: 5000
+  horizon: 12                     # Reduced for BPTT memory with perception backbone
+  gamma: 0.99
+  learning_rate_init: 1e-4         # Lower LR for perception module training
+  learning_rate_final: 1e-6
+  weight_decay: 1e-5
+  log_interval: 10
+  checkpoint_interval: 500
+  early_stop_reward_threshold: -100.0
+
+policy_class: "TrackerFusedPolicy"
+
+policy:
+  net_arch:
+    recurrent:
+      class: "LayerNormGRUCell"
+      kwargs:
+        hidden_size: 256
+    pi: [256, 128]
+    vf: [256, 128]
+    concatenate: true
+    depth:
+      kernel_size: [5, 3, 3]
+      channels: [32, 64, 64]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [64]
+      ln: true
+    color:
+      kernel_size: [5, 3, 3]
+      channels: [16, 32, 32]
+      stride: [2, 2, 1]
+      padding: [0, 0, 1]
+      mlp_layer: [32]
+      ln: true
+    state:
+      mlp_layer: [64]
+      ln: true
+    fused_backbone:
+      embed_dim: 192
+      max_obstacles: 4
+      embedding_dim: 64
+      dropout: 0.1
+    motion_head:
+      embedding_dim: 64
+      hidden_dims: [128, 64]
+      prediction_horizon: 5
+      dropout: 0.1
+  activation_fn: "relu"
+  output_activation_fn: "tanh"
+  feature_extractor_class: "TrackerFusedExtractor"
+  feature_extractor_kwargs:
+    net_arch:
+      concatenate: true
+      depth:
+        kernel_size: [5, 3, 3]
+        channels: [32, 64, 64]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [64]
+        ln: true
+      color:
+        kernel_size: [5, 3, 3]
+        channels: [16, 32, 32]
+        stride: [2, 2, 1]
+        padding: [0, 0, 1]
+        mlp_layer: [32]
+        ln: true
+      state:
+        mlp_layer: [64]
+        ln: true
+      fused_backbone:
+        embed_dim: 192
+        max_obstacles: 4
+        embedding_dim: 64
+        dropout: 0.1
