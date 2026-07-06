@@ -23,6 +23,7 @@ import torch as th
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+from typing import Dict
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -150,7 +151,7 @@ def fit_model(
         model.load_state_dict(best_state)
 
     print(f"\nBest validation loss: {best_val_loss:.6f}")
-    return model
+    return model, best_val_loss
 
 
 def main():
@@ -183,7 +184,7 @@ def main():
 
     # Fit
     print(f"Fitting model with hidden_dims={args.hidden_dims}, epochs={args.epochs}")
-    model = fit_model(
+    model, best_val_loss = fit_model(
         model, train_loader, val_loader, norm_stats,
         epochs=args.epochs, lr=args.lr, device=device,
     )
@@ -193,7 +194,7 @@ def main():
         "state_dict": model.state_dict(),
         "config": {"hidden_dims": args.hidden_dims},
         "norm_stats": norm_stats,
-        "val_loss": float(min([l for l in [1e6]])),  # best_val_loss captured
+        "val_loss": best_val_loss,
     }
     th.save(checkpoint, args.output)
     print(f"Saved checkpoint to {args.output}")

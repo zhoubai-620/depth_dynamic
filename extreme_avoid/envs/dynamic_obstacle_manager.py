@@ -19,8 +19,17 @@ CRITICAL (per skill.md §3.7):
 import torch as th
 import torch.nn as nn
 import numpy as np
-from typing import List, Dict, Optional, Tuple, Union, Literal
+from typing import List, Dict, Optional, Tuple, Union, Any
 from enum import Enum
+
+try:
+    import habitat_sim
+    from habitat_sim.physics import ManagedRigidObject, MotionType as HabitatMotionType
+    _HABITAT_AVAILABLE = True
+except ImportError:
+    _HABITAT_AVAILABLE = False
+    ManagedRigidObject = None
+    HabitatMotionType = None
 
 
 class MotionPattern(Enum):
@@ -58,9 +67,9 @@ class DynamicObstacleManager:
         self._obstacle_velocities: List[List[th.Tensor]] = [
             [] for _ in range(num_envs)
         ]
-        self._obstacle_handles: List[List[int]] = [
+        self._obstacle_handles: List[List[Any]] = [
             [] for _ in range(num_envs)
-        ]  # rigid object IDs
+        ]  # ManagedRigidObject references (not IDs)
 
         # Motion parameters per obstacle: (pattern, params_dict, phase)
         self._motion_configs: List[List[Dict]] = [[] for _ in range(num_envs)]
@@ -82,7 +91,7 @@ class DynamicObstacleManager:
         motion_pattern: Union[str, MotionPattern] = MotionPattern.CONSTANT_VELOCITY,
         motion_params: Optional[Dict] = None,
         obstacle_radius: float = 0.3,
-        rigid_object_handle: Optional[int] = None,
+        rigid_object: Any = None,  # ManagedRigidObject — if None, caller must spawn
     ):
         """
         Register a dynamic obstacle for environment `env_id`.
@@ -92,12 +101,11 @@ class DynamicObstacleManager:
             initial_position: World-frame starting position (3,).
             initial_velocity: World-frame initial velocity (3,).
             motion_pattern: Motion model type.
-            motion_params: Pattern-specific parameters:
-                - constant_velocity: {} (velocity stays fixed from init)
-                - sinusoidal: {"axis": (3,), "amplitude": float, "frequency": float}
-                - trajectory_replay: {"waypoints": (T, 3), "loop": bool}
+            motion_params: Pattern-specific parameters.
             obstacle_radius: Approximate radius for collision checks.
-            rigid_object_handle: habitat-sim rigid object ID. If None, creates one.
+            rigid_object: habitat_sim.physics.ManagedRigidObject reference.
+                CRITICAL: Caller must spawn this BEFORE calling add_obstacle.
+                The object should have MotionType.KINEMATIC set.
         """
         if isinstance(motion_pattern, str):
             motion_pattern = MotionPattern(motion_pattern)
@@ -113,7 +121,7 @@ class DynamicObstacleManager:
         self._obstacle_positions[env_id].append(init_pos)
         self._obstacle_velocities[env_id].append(init_vel)
         self._obstacle_radii[env_id].append(obstacle_radius)
-        self._obstacle_handles[env_id].append(rigid_object_handle)
+        self._obstacle_handles[env_id].append(rigid_object)
         self._motion_configs[env_id].append({
             "pattern": motion_pattern,
             "params": motion_params,
@@ -122,6 +130,13 @@ class DynamicObstacleManager:
             "init_velocity": init_vel.clone(),
         })
         self._num_obstacles[env_id] += 1
+
+        # Set initial position on the actual rigid object
+        if rigid_object is not None:
+            try:
+                rigid_object.translation = init_pos.detach().cpu().numpy()
+            except Exception:
+                pass
 
     def step(self, dt: float):
         """
@@ -143,10 +158,14 @@ class DynamicObstacleManager:
                 self._obstacle_positions[env_id][obs_idx] = new_pos
                 self._obstacle_velocities[env_id][obs_idx] = new_vel
 
-                # Update rigid object in simulation if we have a handle
-                handle = self._obstacle_handles[env_id][obs_idx]
-                if handle is not None and self._scene_manager is not None:
-                    self._set_rigid_translation(env_id, handle, new_pos)
+                # Update rigid object in simulation via stored ManagedRigidObject
+                rigid_obj = self._obstacle_handles[env_id][obs_idx]
+                if rigid_obj is not None:
+                    pos_np = new_pos.detach().cpu().numpy()
+                    try:
+                        rigid_obj.translation = pos_np
+                    except Exception:
+                        pass
 
     def _compute_motion(
         self,
@@ -226,28 +245,6 @@ class DynamicObstacleManager:
             new_vel = init_vel
 
         return new_pos, new_vel
-
-    def _set_rigid_translation(self, env_id: int, handle: int, position: th.Tensor):
-        """
-        Update a rigid object's translation in habitat-sim.
-
-        NOTE: This method assumes habitat-sim's rigid object API supports
-        runtime translation updates. Per skill.md §7, this requires runtime
-        validation. The interface is: rigid_obj.translation = new_pos_cpu.
-        """
-        try:
-            if self._scene_manager is not None:
-                pos_cpu = position.detach().cpu().numpy()
-                # Access rigid object manager through scene manager
-                # The exact API depends on habitat-sim version
-                rom = self._scene_manager.sim.get_rigid_object_manager()
-                obj = rom.get_object_by_id(handle)
-                if obj is not None:
-                    obj.translation = pos_cpu
-        except Exception:
-            # Silently skip in headless/testing — object moves logically
-            # even if rendering is not updated.
-            pass
 
     # --- Ground Truth Accessors (for reward supervision, NEVER for policy input) ---
 

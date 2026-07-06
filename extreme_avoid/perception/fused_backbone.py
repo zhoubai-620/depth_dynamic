@@ -142,10 +142,12 @@ class LightweightViewPrompter(nn.Module):
         if self._use_deform:
             from torchvision.ops import DeformConv2d
             class DeformConv2dPackWrapper(nn.Module):
-                def __init__(self, in_c, out_c, k, s):
+                def __init__(self, in_channels, out_channels, kernel_size, stride):
                     super().__init__()
-                    self.offset_conv = nn.Conv2d(in_c, 2*k*k, k, s, k//2)
-                    self.deform_conv = DeformConv2d(in_c, out_c, k, s, k//2)
+                    k = kernel_size
+                    s = stride
+                    self.offset_conv = nn.Conv2d(in_channels, 2*k*k, k, s, k//2)
+                    self.deform_conv = DeformConv2d(in_channels, out_channels, k, s, k//2)
                 def forward(self, x):
                     offset = self.offset_conv(x)
                     return self.deform_conv(x, offset)

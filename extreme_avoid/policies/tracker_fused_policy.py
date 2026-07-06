@@ -86,7 +86,7 @@ class TrackerFusedPolicy(MultiInputPolicy):
         self,
         obs: Dict[str, th.Tensor],
         latent: Optional[th.Tensor] = None,
-        return_aux: bool = True,
+        return_aux: bool = False,
     ) -> Union[
         Tuple[th.Tensor, th.Tensor],
         Tuple[th.Tensor, Dict[str, th.Tensor], th.Tensor],
@@ -115,12 +115,22 @@ class TrackerFusedPolicy(MultiInputPolicy):
 
             # Motion prediction (Innovation 2)
             if self._has_motion_head:
-                # Get obstacle embedding from feature extractor
+                # Get obstacle embedding from cached extractor output (no re-run)
                 if isinstance(self.feature_extractor, TrackerFusedExtractor):
-                    obstacle_emb = self.feature_extractor.get_obstacle_embedding(
-                        obs.get("color", th.zeros(features.shape[0], 3, 64, 64,
-                                                   device=features.device))
-                    )
+                    cached = self.feature_extractor.last_obstacle_outputs
+                    obstacle_emb = cached.get("embedding", None)
+                    if obstacle_emb is not None:
+                        # Average embedding across slots weighted by presence
+                        presence = cached.get("presence", th.ones(
+                            obstacle_emb.shape[0], obstacle_emb.shape[1],
+                            device=obstacle_emb.device
+                        ))
+                        weights = presence.unsqueeze(-1) + 1e-6
+                        obstacle_emb = (obstacle_emb * weights).sum(dim=1) / weights.sum(dim=1)
+                    else:
+                        obstacle_emb = th.zeros(
+                            (features.shape[0], 64), device=features.device
+                        )
                 else:
                     obstacle_emb = th.zeros(
                         (features.shape[0], 64), device=features.device

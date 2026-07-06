@@ -25,7 +25,8 @@ CRITICAL DESIGN RULES (per skill.md):
 import torch as th
 import torch.nn.functional as F
 import numpy as np
-from typing import Optional, Dict, List, Union
+import os
+from typing import Optional, Dict, List, Union, Any
 from enum import Enum
 
 from depthnav.envs.navigation_env import NavigationEnv, Frame, ActionType, TargetType, get_enum
@@ -35,6 +36,14 @@ from gymnasium import spaces
 from .dynamic_obstacle_manager import DynamicObstacleManager, MotionPattern
 from ..risk.ttc_field import TTCRiskField, compute_ttc_risk, compute_min_ttc
 from ..risk.confidence_proxy import ConfidenceProxy, compute_bearing, compute_range
+
+try:
+    import habitat_sim
+    from habitat_sim.physics import MotionType as HabitatMotionType
+    _HABITAT_AVAILABLE = True
+except ImportError:
+    _HABITAT_AVAILABLE = False
+    HabitatMotionType = None
 
 
 class CurriculumStage(Enum):
@@ -181,7 +190,36 @@ class DynamicAvoidanceEnv(NavigationEnv):
             self._setup_default_dynamic_obstacles()
 
     def _setup_dynamic_obstacles(self, configs: List[Dict]):
-        """Spawn dynamic obstacles from configuration."""
+        """Spawn dynamic obstacles as habitat-sim ManagedRigidObject instances."""
+        if not self.visual or self.scene_manager is None:
+            for env_id in range(self.num_envs):
+                for cfg in configs[:self.max_dynamic_obstacles]:
+                    self.dynamic_obstacle_manager.add_obstacle(
+                        env_id=env_id,
+                        initial_position=cfg.get("initial_position", [5.0, 0.0, 2.0]),
+                        initial_velocity=cfg.get("initial_velocity", [0.0, 0.5, 0.0]),
+                        motion_pattern=cfg.get("motion_pattern", "constant_velocity"),
+                        motion_params=cfg.get("motion_params", {}),
+                        obstacle_radius=cfg.get("radius", 0.3),
+                        rigid_object=None,
+                    )
+            return
+
+        # --- habitat-sim spawning path ---
+        try:
+            sim = self.scene_manager.scenes[0]
+            template_mgr = sim.get_object_template_manager()
+            rigid_mgr = sim.get_rigid_object_manager()
+        except (AttributeError, IndexError):
+            return
+
+        # Load a simple primitive template if none exists
+        # Use the sphere template from habitat-sim's built-in primitives
+        template_ids = template_mgr.load_configs(
+            os.path.join(os.path.dirname(habitat_sim.__file__), "..", "data",
+                         "test_assets", "objects", "sphere")
+        ) if hasattr(template_mgr, 'load_configs') else []
+
         for env_id in range(self.num_envs):
             for cfg in configs[:self.max_dynamic_obstacles]:
                 pos = cfg.get("initial_position", [5.0, 0.0, 2.0])
@@ -189,6 +227,17 @@ class DynamicAvoidanceEnv(NavigationEnv):
                 pattern = cfg.get("motion_pattern", "constant_velocity")
                 params = cfg.get("motion_params", {})
                 radius = cfg.get("radius", 0.3)
+
+                # Spawn rigid object in habitat-sim
+                rigid_obj = None
+                if template_ids:
+                    try:
+                        rigid_obj = rigid_mgr.add_object_by_template_id(template_ids[0])
+                        rigid_obj.translation = pos
+                        rigid_obj.motion_type = HabitatMotionType.KINEMATIC
+                    except Exception:
+                        pass
+
                 self.dynamic_obstacle_manager.add_obstacle(
                     env_id=env_id,
                     initial_position=pos,
@@ -196,7 +245,15 @@ class DynamicAvoidanceEnv(NavigationEnv):
                     motion_pattern=pattern,
                     motion_params=params,
                     obstacle_radius=radius,
+                    rigid_object=rigid_obj,
                 )
+
+        # Recompute collision structures so new obstacles are detected
+        if template_ids:
+            try:
+                sim.recompute_mesh_kdtree()
+            except Exception:
+                pass
 
     def _setup_default_dynamic_obstacles(self):
         """Create default dynamic obstacle configurations."""
@@ -501,19 +558,42 @@ class DynamicAvoidanceEnv(NavigationEnv):
         return reward, metrics
 
     def _get_obstacle_states_for_reward(self):
-        """
-        Get obstacle states for reward computation.
-
-        GT mode (stage2): Return ground truth from DynamicObstacleManager.
-        Perception mode (stage3/4): Return estimated states from policy prediction.
-        """
         if not self.use_perception:
-            # Use ground truth (stage2)
-            obs_pos = self.dynamic_obstacle_manager.get_obstacle_positions_gt(0)
-            obs_vel = self.dynamic_obstacle_manager.get_obstacle_velocities_gt(0)
-            if obs_pos.shape[0] == 0:
+            # Use ground truth (stage2): collect from all envs, pad to same K
+            all_pos = []
+            all_vel = []
+            max_k = 0
+            for env_id in range(self.num_envs):
+                pos = self.dynamic_obstacle_manager.get_obstacle_positions_gt(env_id)
+                vel = self.dynamic_obstacle_manager.get_obstacle_velocities_gt(env_id)
+                all_pos.append(pos)
+                all_vel.append(vel)
+                max_k = max(max_k, pos.shape[0])
+
+            if max_k == 0:
                 return None, None
-            return obs_pos.unsqueeze(0), obs_vel.unsqueeze(0)  # (1, K, 3)
+
+            # Pad to uniform K with zeros + mask
+            padded_pos = []
+            padded_vel = []
+            for env_id in range(self.num_envs):
+                k = all_pos[env_id].shape[0]
+                if k < max_k:
+                    pad_pos = th.cat([
+                        all_pos[env_id],
+                        th.zeros((max_k - k, 3), device=self.device)
+                    ], dim=0)
+                    pad_vel = th.cat([
+                        all_vel[env_id],
+                        th.zeros((max_k - k, 3), device=self.device)
+                    ], dim=0)
+                else:
+                    pad_pos = all_pos[env_id]
+                    pad_vel = all_vel[env_id]
+                padded_pos.append(pad_pos)
+                padded_vel.append(pad_vel)
+
+            return th.stack(padded_pos, dim=0), th.stack(padded_vel, dim=0)
         else:
             # Use perceived/estimated states (stage3/4)
             prediction = self._last_obstacle_prediction
