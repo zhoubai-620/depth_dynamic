@@ -18,8 +18,8 @@ import torch.nn as nn
 from typing import Dict, Optional, Tuple, Any, Union, Type
 from gymnasium import spaces
 
-from depthnav.policies.multi_input_policy import MultiInputPolicy
-from depthnav.policies.extractors import FeatureExtractor
+from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
+from extreme_avoid.vendor.depthnav.policies.extractors import FeatureExtractor
 
 from ..perception.tracker_fused_extractor import TrackerFusedExtractor
 from ..prediction.motion_head import MotionHead

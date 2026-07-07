@@ -10,8 +10,8 @@ Key design decision (per skill.md §0.2):
   This MUST be replaced with `issubclass()` — done in train_bptt_ext.py.
 """
 
-from depthnav.envs.env_aliases import env_aliases
-from depthnav.policies.policy_aliases import policy_aliases
+from extreme_avoid.vendor.depthnav.envs.env_aliases import env_aliases
+from extreme_avoid.vendor.depthnav.policies.policy_aliases import policy_aliases
 
 # Lazy imports to avoid circular dependencies
 # New classes are registered when their modules are imported

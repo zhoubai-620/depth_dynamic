@@ -28,7 +28,7 @@ import torch.nn.functional as F
 from gymnasium import spaces
 from typing import Dict, Optional, Type
 
-from depthnav.policies.extractors import (
+from extreme_avoid.vendor.depthnav.policies.extractors import (
     ImageExtractor,
     FeatureExtractor,
     set_mlp_feature_extractor,

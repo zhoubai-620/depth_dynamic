@@ -38,7 +38,7 @@ def test_registry_imports():
 def test_env_class_instantiatable():
     """DynamicAvoidanceEnv can be imported and type-checked."""
     from extreme_avoid.envs.dynamic_avoidance_env import DynamicAvoidanceEnv
-    from depthnav.envs.navigation_env import NavigationEnv
+    from extreme_avoid.vendor.depthnav.envs.navigation_env import NavigationEnv
 
     assert issubclass(DynamicAvoidanceEnv, NavigationEnv), (
         "DynamicAvoidanceEnv must be a subclass of NavigationEnv"
@@ -49,7 +49,7 @@ def test_env_class_instantiatable():
 def test_policy_class_instantiatable():
     """TrackerFusedPolicy can be imported and type-checked."""
     from extreme_avoid.policies.tracker_fused_policy import TrackerFusedPolicy
-    from depthnav.policies.multi_input_policy import MultiInputPolicy
+    from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
 
     assert issubclass(TrackerFusedPolicy, MultiInputPolicy), (
         "TrackerFusedPolicy must be a subclass of MultiInputPolicy"

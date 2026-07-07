@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from extreme_avoid.registry import env_aliases, policy_aliases
 from extreme_avoid.risk.confidence_proxy import compute_bearing, compute_range
-from depthnav.policies.multi_input_policy import MultiInputPolicy
+from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
 
 
 def collect_logs(

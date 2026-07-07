@@ -29,8 +29,8 @@ import os
 from typing import Optional, Dict, List, Union, Any
 from enum import Enum
 
-from depthnav.envs.navigation_env import NavigationEnv, Frame, ActionType, TargetType, get_enum
-from depthnav.utils import Rotation3
+from extreme_avoid.vendor.depthnav.envs.navigation_env import NavigationEnv, Frame, ActionType, TargetType, get_enum
+from extreme_avoid.vendor.depthnav.utils import Rotation3
 from gymnasium import spaces
 
 from .dynamic_obstacle_manager import DynamicObstacleManager, MotionPattern

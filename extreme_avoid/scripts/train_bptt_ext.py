@@ -31,9 +31,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from extreme_avoid.registry import env_aliases, policy_aliases
 from extreme_avoid.scripts.eval_avoidance import EvaluateDynamicAvoidance
-from depthnav.policies.bptt_algorithm import BPTT
-from depthnav.policies.multi_input_policy import MultiInputPolicy
-from depthnav.common import ExitCode
+from extreme_avoid.vendor.depthnav.policies.bptt_algorithm import BPTT
+from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
+from extreme_avoid.vendor.depthnav.common import ExitCode
 
 
 def convert_observations_to_device(obs, device):
@@ -107,7 +107,7 @@ def main(args):
     trainer.policy.train()
 
     from tqdm import tqdm
-    from depthnav.common import ExitCode, observation_to_device
+    from extreme_avoid.vendor.depthnav.common import ExitCode, observation_to_device
 
     exit_code = ExitCode.ERROR
     start_iter = args.start_iter

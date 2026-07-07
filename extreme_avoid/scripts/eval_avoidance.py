@@ -26,10 +26,9 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from extreme_avoid.registry import env_aliases, policy_aliases
-from depthnav.scripts.eval_logger import Evaluate
-from depthnav.policies.multi_input_policy import MultiInputPolicy
-from depthnav.common import observation_to_device
-from depthnav.utils import rgba2rgb
+from extreme_avoid.vendor.depthnav.scripts.eval_logger import Evaluate
+from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
+from extreme_avoid.vendor.depthnav.common import observation_to_device, rgba2rgb
 
 
 class EvaluateDynamicAvoidance(Evaluate):

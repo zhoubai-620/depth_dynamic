@@ -27,9 +27,9 @@ import os
 
 # Dynamic import of DPTracker backbone — requires third_party/ on PYTHONPATH
 try:
-    from lib.models.layers.illumination_prompter import IlluminationPrompter
-    from lib.models.layers.view_prompter import ViewPrompter
-    from lib.models.layers.prompt_adaptor import AdaptorBlock
+    from extreme_avoid.vendor.dptracker.layers.illumination_prompter import IlluminationPrompter
+    from extreme_avoid.vendor.dptracker.layers.view_prompter import ViewPrompter
+    from extreme_avoid.vendor.dptracker.layers.prompt_adaptor import AdaptorBlock
     _DPTRACKER_AVAILABLE = True
 except ImportError:
     _DPTRACKER_AVAILABLE = False
