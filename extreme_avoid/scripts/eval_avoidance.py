@@ -64,13 +64,12 @@ class EvaluateDynamicAvoidance(Evaluate):
         base_df["dyn_collision_rate"] = np.mean(self._dynamic_collisions) if self._dynamic_collisions else 0.0
         base_df["min_ttc_mean"] = np.mean(self._min_ttcs) if self._min_ttcs else float('inf')
         base_df["min_ttc_median"] = np.median(self._min_ttcs) if self._min_ttcs else float('inf')
-        base_df["id_switch_rate"] = np.mean(self._id_switches) if self._id_switches else 0.0
+        base_df["id_switch_rate"] = float('nan')  # Requires ObstacleHead identity tracking (#9)
         base_df["avg_risk"] = np.mean(self._risks) if self._risks else 0.0
         base_df["avg_track_conf"] = np.mean(self._track_confs) if self._track_confs else 0.0
 
         return base_df
 
-    @th.no_grad()
     @th.no_grad()
     def single_rollout(self, render=False):
         """
@@ -269,7 +268,7 @@ class EvaluateDynamicAvoidance(Evaluate):
 
     def _process_step_metrics(self, info: Dict):
         """Extract dynamic-obstacle-specific metrics from env info dict."""
-        for key in ["risk", "track_confidence", "min_predicted_ttc"]:
+        for key in ["risk", "track_confidence", "min_predicted_ttc", "dynamic_collision"]:
             if key in info.get("loss_metrics", {}):
                 val = info["loss_metrics"][key]
                 if isinstance(val, th.Tensor):
@@ -281,6 +280,8 @@ class EvaluateDynamicAvoidance(Evaluate):
                 elif key == "min_predicted_ttc":
                     if val < float('inf'):
                         self._min_ttcs.append(float(val))
+                elif key == "dynamic_collision":
+                    self._dynamic_collisions.append(float(val))
 
 
 def main():
@@ -339,7 +340,7 @@ def main():
     try:
         policy = policy_class(env.observation_space, **policy_kwargs)
         policy.load(args.weight)
-    except (TypeError, Exception) as e:
+    except Exception as e:
         print(f"Warning: Could not construct policy with config: {e}")
         print("Falling back to MultiInputPolicy...")
         policy = MultiInputPolicy(env.observation_space)

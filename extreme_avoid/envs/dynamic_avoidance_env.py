@@ -591,6 +591,7 @@ class DynamicAvoidanceEnv(NavigationEnv):
             ).clone().detach().cpu() if (
                 obs_pos is not None and obs_pos.shape[1] > 0
             ) else th.full((self.num_envs,), float('inf')).cpu(),
+            "dynamic_collision": self._compute_dynamic_collision_flag(obs_pos).clone().detach().cpu(),
         }
 
         return reward, metrics
@@ -655,6 +656,18 @@ class DynamicAvoidanceEnv(NavigationEnv):
                     mask = th.ones(B, 1, device=self.device)
                     return pos, vel, mask
             return None, None, None
+
+    def _compute_dynamic_collision_flag(self, obs_pos: th.Tensor) -> th.Tensor:
+        """Per-step heuristic: is the nearest dynamic obstacle closer than
+        the nearest static collision point?
+
+        Returns (B,) float tensor; 1.0 means the immediate collision threat
+        is from a dynamic obstacle, 0.0 means static geometry is closer.
+        """
+        if obs_pos is None or obs_pos.shape[1] == 0:
+            return th.zeros(self.num_envs, device=self.device)
+        min_dist_to_dyn = (self.position.unsqueeze(1) - obs_pos).norm(dim=2).min(dim=1).values
+        return (min_dist_to_dyn < self.collision_dis.squeeze()).float()
 
     def close(self):
         """Cleanup resources."""
