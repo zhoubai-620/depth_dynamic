@@ -121,6 +121,8 @@ class DynamicAvoidanceEnv(NavigationEnv):
             sensor_kwargs=sensor_kwargs,
         )
 
+        self.scene_kwargs = scene_kwargs or {}
+
         # --- Dynamic obstacle manager ---
         self.dynamic_obstacle_manager = DynamicObstacleManager(
             num_envs=num_envs, device=device,
@@ -213,10 +215,10 @@ class DynamicAvoidanceEnv(NavigationEnv):
         template_path = (self.scene_kwargs or {}).get(
             "obstacle_object_config_path", None
         )
-
+        try:
             template_ids = []
             for env_id in range(self.num_envs):
-                scene_id = env_id % len(self.scene_manager.scenes)
+                scene_id = env_id // self.scene_manager.num_agent_per_scene
                 sim = self.scene_manager.scenes[scene_id]
                 template_mgr = sim.get_object_template_manager()
                 rigid_mgr = sim.get_rigid_object_manager()
@@ -443,6 +445,7 @@ class DynamicAvoidanceEnv(NavigationEnv):
                 desired_direction = self.target_direction
         else:
             # No dynamic obstacles: use target direction (like parent)
+            obs_pos = obs_vel = obs_mask = None
             risk = th.zeros(self.num_envs, device=self.device)
             risk_grad = th.zeros((self.num_envs, 3), device=self.device)
             desired_direction = self.target_direction
@@ -512,8 +515,7 @@ class DynamicAvoidanceEnv(NavigationEnv):
             )
 
             # Risk-based weight: higher risk → prioritize looking at obstacle
-            risk_norm = risk / (risk.max(dim=0, keepdim=True).values + 1e-8)  # per-env independent
-            risk_norm = th.clamp(risk_norm, 0.0, 1.0).unsqueeze(-1)  # (B, 1)
+            risk_norm = th.clamp(risk / (self.ttc_field.ttc_threshold + 1e-8), 0.0, 1.0).unsqueeze(-1)
 
             # Confidence-weighted yaw (Innovation 3)
             if self._confidence_proxy is not None and self.use_confidence_proxy:

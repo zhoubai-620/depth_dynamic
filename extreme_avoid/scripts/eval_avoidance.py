@@ -71,12 +71,12 @@ class EvaluateDynamicAvoidance(Evaluate):
         return base_df
 
     @th.no_grad()
+    @th.no_grad()
     def single_rollout(self, render=False):
         """
         Override parent's single_rollout to fix type(...) == MultiInputPolicy
-        to isinstance(...). The parent uses exact type equality which excludes
-        subclasses like TrackerFusedPolicy, causing them to receive obs['state']
-        as a raw tensor instead of a dict.
+        to isinstance(...), and fix return type: returns dict-of-list (batch_stats)
+        matching the parent's expected structure.
         """
         agent_logs = [
             {
@@ -90,19 +90,21 @@ class EvaluateDynamicAvoidance(Evaluate):
                 "success": 0,
                 "collision": 0,
                 "timeout": 0,
-                "avg_reward": 0,
-                "duration": 0,
-                "steps": 0,
-                "last_action_x": 0,
-                "last_action_y": 0,
-                "last_action_z": 0,
-                "last_action_yaw": 0,
-                "last_position_x": 0,
-                "last_position_y": 0,
-                "last_position_z": 0,
-                "last_velocity_x": 0,
-                "last_velocity_y": 0,
-                "last_velocity_z": 0,
+                "avg_reward": 0.0,
+                "duration": 0.0,
+                "steps": 0.0,
+                "path_length": 0.0,
+                "avg_control_effort": 0.0,
+                "last_action_x": 0.0,
+                "last_action_y": 0.0,
+                "last_action_z": 0.0,
+                "last_action_yaw": 0.0,
+                "last_position_x": 0.0,
+                "last_position_y": 0.0,
+                "last_position_z": 0.0,
+                "last_velocity_x": 0.0,
+                "last_velocity_y": 0.0,
+                "last_velocity_z": 0.0,
             }
             for _ in range(self.env.num_envs)
         ]
@@ -145,41 +147,24 @@ class EvaluateDynamicAvoidance(Evaluate):
                 cv2.imshow("render cams", render_grid)
                 cv2.waitKey(1)
 
-            # log
             for index in reversed(eval_info_id_list):
                 if not terminated[index]:
                     agent_logs[index]["speed"].append(
-                        float(self.env.speed[index].detach().cpu())
+                        self.env.speed[index].item()
+                    )
+                    agent_logs[index]["acceleration"].append(
+                        self.env.acceleration[index].norm().item()
+                    )
+                    agent_logs[index]["jerk"].append(
+                        self.env.jerk[index].norm().item()
                     )
                     agent_logs[index]["yaw_rate"].append(
-                        float(self.env.omega[index].norm().detach().cpu())
+                        self.env.omega[index][2].item()
                     )
                     agent_logs[index]["obstacle_distance"].append(
-                        float(self.env.collision_dis[index].detach().cpu())
+                        self.env.collision_dis[index].item()
                     )
-                    agent_logs[index]["avg_reward"] += float(reward[index].detach().cpu())
-                    agent_logs[index]["steps"] += 1
-                    agent_logs[index]["duration"] = (
-                        agent_logs[index]["steps"] * self.env.dynamics.ctrl_dt
-                    )
-                    agent_logs[index]["last_action_x"] = float(action[index][0].detach().cpu())
-                    agent_logs[index]["last_action_y"] = float(action[index][1].detach().cpu())
-                    agent_logs[index]["last_action_z"] = float(action[index][2].detach().cpu())
-                    agent_logs[index]["last_action_yaw"] = float(action[index][3].detach().cpu())
-                    agent_logs[index]["last_position_x"] = float(self.env.position[index][0].detach().cpu())
-                    agent_logs[index]["last_position_y"] = float(self.env.position[index][1].detach().cpu())
-                    agent_logs[index]["last_position_z"] = float(self.env.position[index][2].detach().cpu())
-                    agent_logs[index]["last_velocity_x"] = float(self.env.velocity[index][0].detach().cpu())
-                    agent_logs[index]["last_velocity_y"] = float(self.env.velocity[index][1].detach().cpu())
-                    agent_logs[index]["last_velocity_z"] = float(self.env.velocity[index][2].detach().cpu())
-
-                    if self.env.steps[index] == 0:
-                        agent_logs[index]["position"].append(
-                            self.env.position[index].cpu().tolist()
-                        )
-                        agent_logs[index]["velocity"].append(
-                            self.env.velocity[index].cpu().tolist()
-                        )
+                    agent_logs[index]["position"].append(self.env.position[index])
 
                     # Dynamic-obstacle-specific step metrics
                     if isinstance(infos, list) and index < len(infos):
@@ -187,18 +172,100 @@ class EvaluateDynamicAvoidance(Evaluate):
                     elif isinstance(infos, dict):
                         self._process_step_metrics(infos)
                 else:
-                    if infos[index]["collision"]:
-                        agent_logs[index]["collision"] += 1
-                    if infos[index]["success"]:
-                        agent_logs[index]["success"] += 1
-                    if infos[index]["timeout"]:
-                        agent_logs[index]["timeout"] += 1
                     eval_info_id_list.remove(index)
+
+                    # Collision: from env attribute (same as original eval_logger.py)
+                    agent_logs[index]["collision"] = (
+                        self.env.is_collision[index].int().item()
+                    )
+                    # Success: from infos (key is "is_success" in base_env.py)
+                    agent_logs[index]["success"] = int(infos[index]["is_success"])
+                    # Timeout: derived (neither collision nor success)
+                    agent_logs[index]["timeout"] = int(
+                        not agent_logs[index]["collision"]
+                        and not agent_logs[index]["success"]
+                    )
+                    agent_logs[index]["avg_reward"] = infos[index][
+                        "episode_avg_step_reward"
+                    ].item()
+                    agent_logs[index]["duration"] = infos[index][
+                        "episode_duration"
+                    ].item()
+                    agent_logs[index]["steps"] = float(
+                        infos[index]["episode_length"].item()
+                    )
+
+                    # Last state/action
+                    action_cpu = action.cpu()
+                    agent_logs[index]["last_action_x"] = action_cpu[index][0].item()
+                    agent_logs[index]["last_action_y"] = action_cpu[index][1].item()
+                    agent_logs[index]["last_action_z"] = action_cpu[index][2].item()
+                    agent_logs[index]["last_action_yaw"] = (
+                        action_cpu[index][3].item() if action_cpu.shape[1] >= 4 else 0.0
+                    )
+                    agent_logs[index]["last_position_x"] = self.env.position[index][0].item()
+                    agent_logs[index]["last_position_y"] = self.env.position[index][1].item()
+                    agent_logs[index]["last_position_z"] = self.env.position[index][2].item()
+                    agent_logs[index]["last_velocity_x"] = self.env.velocity[index][0].item()
+                    agent_logs[index]["last_velocity_y"] = self.env.velocity[index][1].item()
+                    agent_logs[index]["last_velocity_z"] = self.env.velocity[index][2].item()
+
+                    # Path length (from accumulated positions)
+                    points = th.stack(agent_logs[index]["position"])
+                    agent_logs[index]["path_length"] = (
+                        (points[1:] - points[:-1]).norm(dim=1).sum().item()
+                    )
+
+                    # Control effort
+                    jerk_t = th.tensor(agent_logs[index]["jerk"])
+                    total_ce = (jerk_t ** 2).sum() * self.env.dynamics.ctrl_dt
+                    agent_logs[index]["avg_control_effort"] = (
+                        (total_ce / len(jerk_t)).item() if len(jerk_t) > 0 else 0.0
+                    )
 
             if len(eval_info_id_list) == 0:
                 break
 
-        return agent_logs
+        batch_stats = {
+            "avg_speed": [
+                th.tensor(agent["speed"]).mean().item() for agent in agent_logs
+            ],
+            "max_speed": [
+                th.tensor(agent["speed"]).max().item() for agent in agent_logs
+            ],
+            "max_acceleration": [
+                th.tensor(agent["acceleration"]).max().item() for agent in agent_logs
+            ],
+            "avg_yaw_rate": [
+                th.tensor(agent["yaw_rate"]).mean().item() for agent in agent_logs
+            ],
+            "max_yaw_rate": [
+                th.tensor(agent["yaw_rate"]).max().item() for agent in agent_logs
+            ],
+            "avg_min_obstacle_distance": [
+                th.tensor(agent["obstacle_distance"]).min().item()
+                for agent in agent_logs
+            ],
+            "collision_count": [agent["collision"] for agent in agent_logs],
+            "success_count": [agent["success"] for agent in agent_logs],
+            "timeout_count": [agent["timeout"] for agent in agent_logs],
+            "avg_reward": [agent["avg_reward"] for agent in agent_logs],
+            "duration": [agent["duration"] for agent in agent_logs],
+            "steps": [agent["steps"] for agent in agent_logs],
+            "path_length": [agent["path_length"] for agent in agent_logs],
+            "avg_control_effort": [agent["avg_control_effort"] for agent in agent_logs],
+            "last_action_x": [agent["last_action_x"] for agent in agent_logs],
+            "last_action_y": [agent["last_action_y"] for agent in agent_logs],
+            "last_action_z": [agent["last_action_z"] for agent in agent_logs],
+            "last_action_yaw": [agent["last_action_yaw"] for agent in agent_logs],
+            "last_position_x": [agent["last_position_x"] for agent in agent_logs],
+            "last_position_y": [agent["last_position_y"] for agent in agent_logs],
+            "last_position_z": [agent["last_position_z"] for agent in agent_logs],
+            "last_velocity_x": [agent["last_velocity_x"] for agent in agent_logs],
+            "last_velocity_y": [agent["last_velocity_y"] for agent in agent_logs],
+            "last_velocity_z": [agent["last_velocity_z"] for agent in agent_logs],
+        }
+        return batch_stats
 
     def _process_step_metrics(self, info: Dict):
         """Extract dynamic-obstacle-specific metrics from env info dict."""
