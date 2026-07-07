@@ -25,11 +25,16 @@ from enum import Enum
 try:
     import habitat_sim
     from habitat_sim.physics import ManagedRigidObject, MotionType as HabitatMotionType
+    try:
+        import magnum as mn
+    except ImportError:
+        mn = None
     _HABITAT_AVAILABLE = True
 except ImportError:
     _HABITAT_AVAILABLE = False
     ManagedRigidObject = None
     HabitatMotionType = None
+    mn = None
 
 
 class MotionPattern(Enum):
@@ -134,7 +139,8 @@ class DynamicObstacleManager:
         # Set initial position on the actual rigid object
         if rigid_object is not None:
             try:
-                rigid_object.translation = init_pos.detach().cpu().numpy()
+                pos_np = init_pos.detach().cpu().numpy()
+                rigid_object.translation = mn.Vector3(pos_np) if mn is not None else pos_np
             except Exception:
                 pass
 
@@ -163,7 +169,7 @@ class DynamicObstacleManager:
                 if rigid_obj is not None:
                     pos_np = new_pos.detach().cpu().numpy()
                     try:
-                        rigid_obj.translation = pos_np
+                        rigid_obj.translation = mn.Vector3(pos_np) if mn is not None else pos_np
                     except Exception:
                         pass
 

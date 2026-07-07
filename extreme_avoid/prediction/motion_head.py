@@ -128,8 +128,8 @@ class MotionHead(nn.Module):
             "position_logvar": position_logvar,
             "velocity_logvar": velocity_logvar,
             "prediction_confidence": pred_conf,
-            "step_1_position": predicted_positions[:, 0, :],   # (B, 3)
-            "step_1_velocity": predicted_velocities[:, 0, :],  # (B, 3)
+            "step_1_position": predicted_positions[:, 0:1, :],        # (B, 1, 3) — explicit K=1 dim
+            "step_1_velocity": predicted_velocities[:, 0:1, :],       # (B, 1, 3)
         }
 
     def get_next_step_prediction(
@@ -195,6 +195,6 @@ class ConstantVelocityMotionHead(nn.Module):
             "position_logvar": th.zeros(B, H, 3, device=current_position.device),
             "velocity_logvar": th.zeros(B, H, 3, device=current_position.device),
             "prediction_confidence": th.ones(B, 1, device=current_position.device),
-            "step_1_position": pos_pred[:, 0, :],
-            "step_1_velocity": vel_pred[:, 0, :],
+            "step_1_position": pos_pred[:, 0:1, :],
+            "step_1_velocity": vel_pred[:, 0:1, :],
         }

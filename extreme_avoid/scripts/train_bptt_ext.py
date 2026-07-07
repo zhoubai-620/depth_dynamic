@@ -30,10 +30,10 @@ from copy import deepcopy
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from extreme_avoid.registry import env_aliases, policy_aliases
+from extreme_avoid.scripts.eval_avoidance import EvaluateDynamicAvoidance
 from depthnav.policies.bptt_algorithm import BPTT
 from depthnav.policies.multi_input_policy import MultiInputPolicy
 from depthnav.common import ExitCode
-from depthnav.scripts.eval_logger import Evaluate
 
 
 def convert_observations_to_device(obs, device):
@@ -187,7 +187,7 @@ def main(args):
                 for i, (eval_env, csv_file) in enumerate(
                     zip(trainer.eval_envs, trainer.eval_csvs)
                 ):
-                    e = Evaluate(eval_env, trainer.policy)
+                    e = EvaluateDynamicAvoidance(eval_env, trainer.policy)
                     index = start_iter + iter
                     df = e.run_rollouts(num_rollouts=5, run_name=index, render=args.render)
                     df["scene"] = os.path.basename(env.scene_manager.scene_path)

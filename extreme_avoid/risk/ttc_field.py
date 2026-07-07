@@ -71,7 +71,8 @@ class TTCRiskField(nn.Module):
         drone_velocity: th.Tensor,       # (B, 3) or (3,)
         obstacle_positions: th.Tensor,   # (B, K, 3) or (K, 3)
         obstacle_velocities: th.Tensor,  # (B, K, 3) or (K, 3)
-        obstacle_radii: Optional[th.Tensor] = None,  # (K,) or None
+         obstacle_radii: Optional[th.Tensor] = None,  # (K,) or None
+         obstacle_mask: Optional[th.Tensor] = None,   # (B, K) — 1 for real, 0 for phantom
     ) -> Tuple[th.Tensor, th.Tensor]:
         """
         Compute TTC risk and avoidance direction.
@@ -82,6 +83,7 @@ class TTCRiskField(nn.Module):
             obstacle_positions: Obstacle world-frame positions.
             obstacle_velocities: Obstacle world-frame velocities.
             obstacle_radii: Obstacle bounding radii (optional).
+            obstacle_mask: (B,K) mask — 1 for real obstacles, 0 for padding phantoms.
 
         Returns:
             risk: Scalar risk value per batch element. Shape: (B,) or ().
@@ -97,6 +99,7 @@ class TTCRiskField(nn.Module):
             barrier_beta=self.barrier_beta,
             eps=self.eps,
             risk_scale=self.risk_scale,
+            obstacle_mask=obstacle_mask,
         )
 
 
@@ -111,6 +114,7 @@ def compute_ttc_risk(
     barrier_beta: float = 5.0,
     eps: float = 1e-6,
     risk_scale: float = 1.0,
+    obstacle_mask: Optional[th.Tensor] = None,
 ) -> Tuple[th.Tensor, th.Tensor]:
     """
     Pure-function version of TTC risk computation.
@@ -139,11 +143,18 @@ def compute_ttc_risk(
 
     B = drone_position.shape[0]
 
-    # Normalize obstacle tensors to (B, K, 3)
-    if obstacle_positions.dim() == 2:
-        obstacle_positions = obstacle_positions.unsqueeze(0).expand(B, -1, -1)
-    if obstacle_velocities.dim() == 2:
-        obstacle_velocities = obstacle_velocities.unsqueeze(0).expand(B, -1, -1)
+    # Explicit 3D validation — NO ambiguous dim()==2 fallback.
+    # 2D tensors like (B, 3) were misinterpreted as (K, 3) in prior versions,
+    # causing cross-env data leakage when num_envs > 1.
+    # Callers must explicitly unsqueeze to (B, K, 3) — even for K=1.
+    assert obstacle_positions.dim() == 3, (
+        f"obstacle_positions must be 3D (B, K, 3), got shape {obstacle_positions.shape}. "
+        f"If K=1, unsqueeze to (B, 1, 3) explicitly."
+    )
+    assert obstacle_velocities.dim() == 3, (
+        f"obstacle_velocities must be 3D (B, K, 3), got shape {obstacle_velocities.shape}. "
+        f"If K=1, unsqueeze to (B, 1, 3) explicitly."
+    )
 
     K = obstacle_positions.shape[1]
 
@@ -215,6 +226,10 @@ def compute_ttc_risk(
     # Mask: only count valid TTC obstacles
     per_obstacle_risk = per_obstacle_risk * valid_ttc.float()
 
+    # Mask out padded/phantom obstacles (from per-env padding in _get_obstacle_states_for_reward)
+    if obstacle_mask is not None:
+        per_obstacle_risk = per_obstacle_risk * obstacle_mask.float()
+
     # Aggregate: sum risk across obstacles
     risk = per_obstacle_risk.sum(dim=1) * risk_scale  # (B,)
 
@@ -247,6 +262,7 @@ def compute_min_ttc(
     obstacle_positions: th.Tensor,
     obstacle_velocities: th.Tensor,
     eps: float = 1e-6,
+    obstacle_mask: Optional[th.Tensor] = None,
 ) -> th.Tensor:
     """
     Compute the minimum TTC across all obstacles (for evaluation metrics).
@@ -261,10 +277,12 @@ def compute_min_ttc(
 
     B = drone_position.shape[0]
 
-    if obstacle_positions.dim() == 2:
-        obstacle_positions = obstacle_positions.unsqueeze(0).expand(B, -1, -1)
-    if obstacle_velocities.dim() == 2:
-        obstacle_velocities = obstacle_velocities.unsqueeze(0).expand(B, -1, -1)
+    assert obstacle_positions.dim() == 3, (
+        f"obstacle_positions must be 3D (B, K, 3), got shape {obstacle_positions.shape}"
+    )
+    assert obstacle_velocities.dim() == 3, (
+        f"obstacle_velocities must be 3D (B, K, 3), got shape {obstacle_velocities.shape}"
+    )
 
     K = obstacle_positions.shape[1]
     if K == 0:
@@ -280,6 +298,10 @@ def compute_min_ttc(
     t_star = -v_rel_dot_p_rel / v_rel_norm_sq
 
     t_star[t_star < 0] = float('inf')
+
+    # Mask out padded phantom obstacles
+    if obstacle_mask is not None:
+        t_star = th.where(obstacle_mask.bool(), t_star, th.full_like(t_star, float('inf')))
 
     min_ttc = t_star.min(dim=1).values
 

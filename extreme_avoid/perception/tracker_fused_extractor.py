@@ -76,9 +76,17 @@ class TrackerFusedExtractor(ImageExtractor):
     def _build(self, observation_space, net_arch, activation_fn):
         """
         Build extractor: parent's depth CNN + fused backbone + state MLP.
+
+        CRITICAL: net_arch may contain a 'color' key (for FusedBackbone input).
+        The parent ImageExtractor._build() treats 'color' as an independent CNN
+        branch, but color observations are uint8 and won't survive the parent's
+        depth-only preprocessing. We MUST filter 'color' out before calling super.
         """
         # --- Parent: build depth CNN ---
-        super()._build(observation_space, net_arch, activation_fn)
+        # Filter out 'color' — parent handles only depth (and state via MLP).
+        # The 'color' branch is built separately via FusedBackbone below.
+        depth_only_net_arch = {k: v for k, v in net_arch.items() if k != "color"}
+        super()._build(observation_space, depth_only_net_arch, activation_fn)
 
         # Save depth features dimension before we add fusion
         self._depth_features_dim = self._features_dim

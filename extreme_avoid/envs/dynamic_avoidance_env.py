@@ -191,6 +191,9 @@ class DynamicAvoidanceEnv(NavigationEnv):
 
     def _setup_dynamic_obstacles(self, configs: List[Dict]):
         """Spawn dynamic obstacles as habitat-sim ManagedRigidObject instances."""
+        import logging
+        _logger = logging.getLogger(__name__)
+
         if not self.visual or self.scene_manager is None:
             for env_id in range(self.num_envs):
                 for cfg in configs[:self.max_dynamic_obstacles]:
@@ -206,54 +209,72 @@ class DynamicAvoidanceEnv(NavigationEnv):
             return
 
         # --- habitat-sim spawning path ---
-        try:
-            sim = self.scene_manager.scenes[0]
-            template_mgr = sim.get_object_template_manager()
-            rigid_mgr = sim.get_rigid_object_manager()
-        except (AttributeError, IndexError):
-            return
+        # Read object template path from scene_kwargs (same convention as static obstacles)
+        template_path = (self.scene_kwargs or {}).get(
+            "obstacle_object_config_path", None
+        )
 
-        # Load a simple primitive template if none exists
-        # Use the sphere template from habitat-sim's built-in primitives
-        template_ids = template_mgr.load_configs(
-            os.path.join(os.path.dirname(habitat_sim.__file__), "..", "data",
-                         "test_assets", "objects", "sphere")
-        ) if hasattr(template_mgr, 'load_configs') else []
+            template_ids = []
+            for env_id in range(self.num_envs):
+                scene_id = env_id % len(self.scene_manager.scenes)
+                sim = self.scene_manager.scenes[scene_id]
+                template_mgr = sim.get_object_template_manager()
+                rigid_mgr = sim.get_rigid_object_manager()
 
-        for env_id in range(self.num_envs):
-            for cfg in configs[:self.max_dynamic_obstacles]:
-                pos = cfg.get("initial_position", [5.0, 0.0, 2.0])
-                vel = cfg.get("initial_velocity", [0.0, 0.5, 0.0])
-                pattern = cfg.get("motion_pattern", "constant_velocity")
-                params = cfg.get("motion_params", {})
-                radius = cfg.get("radius", 0.3)
+                if not template_ids and template_path is not None:
+                    if hasattr(template_mgr, 'load_configs') and os.path.exists(template_path):
+                        template_ids = template_mgr.load_configs(template_path)
+                        if not template_ids:
+                            _logger.warning(
+                                f"load_configs({template_path}) returned empty list"
+                            )
+                    else:
+                        _logger.warning(
+                            f"Object template path not found or load_configs unavailable: {template_path}"
+                        )
 
-                # Spawn rigid object in habitat-sim
-                rigid_obj = None
+                for cfg in configs[:self.max_dynamic_obstacles]:
+                    pos = cfg.get("initial_position", [5.0, 0.0, 2.0])
+                    vel = cfg.get("initial_velocity", [0.0, 0.5, 0.0])
+                    pattern = cfg.get("motion_pattern", "constant_velocity")
+                    params = cfg.get("motion_params", {})
+                    radius = cfg.get("radius", 0.3)
+
+                    rigid_obj = None
+                    if template_ids:
+                        try:
+                            rigid_obj = rigid_mgr.add_object_by_template_id(template_ids[0])
+                            # Wrap in magnum.Vector3 per habitat-sim convention
+                            # (scene_manager.py uses mn.Vector3 for all translation assignments)
+                            try:
+                                import magnum as mn
+                                rigid_obj.translation = mn.Vector3(pos)
+                            except ImportError:
+                                rigid_obj.translation = pos
+                            rigid_obj.motion_type = HabitatMotionType.KINEMATIC
+                        except Exception as e:
+                            _logger.warning(
+                                f"Failed to spawn dynamic obstacle at {pos}: {e}"
+                            )
+
+                    self.dynamic_obstacle_manager.add_obstacle(
+                        env_id=env_id,
+                        initial_position=pos,
+                        initial_velocity=vel,
+                        motion_pattern=pattern,
+                        motion_params=params,
+                        obstacle_radius=radius,
+                        rigid_object=rigid_obj,
+                    )
+
                 if template_ids:
                     try:
-                        rigid_obj = rigid_mgr.add_object_by_template_id(template_ids[0])
-                        rigid_obj.translation = pos
-                        rigid_obj.motion_type = HabitatMotionType.KINEMATIC
-                    except Exception:
-                        pass
+                        sim.recompute_mesh_kdtree()
+                    except Exception as e:
+                        _logger.warning(f"recompute_mesh_kdtree failed: {e}")
 
-                self.dynamic_obstacle_manager.add_obstacle(
-                    env_id=env_id,
-                    initial_position=pos,
-                    initial_velocity=vel,
-                    motion_pattern=pattern,
-                    motion_params=params,
-                    obstacle_radius=radius,
-                    rigid_object=rigid_obj,
-                )
-
-        # Recompute collision structures so new obstacles are detected
-        if template_ids:
-            try:
-                sim.recompute_mesh_kdtree()
-            except Exception:
-                pass
+        except (AttributeError, IndexError) as e:
+            _logger.warning(f"Cannot access habitat-sim scene for dynamic obstacles: {e}")
 
     def _setup_default_dynamic_obstacles(self):
         """Create default dynamic obstacle configurations."""
@@ -388,17 +409,26 @@ class DynamicAvoidanceEnv(NavigationEnv):
         # --- Desired direction: TTC risk field replaces geodesic ---
         if self.use_dynamic_obstacles and self.dynamic_obstacle_manager is not None:
             # Get obstacle states — GT or prediction based on curriculum stage
-            obs_pos, obs_vel = self._get_obstacle_states_for_reward()
+            obs_pos, obs_vel, obs_mask = self._get_obstacle_states_for_reward()
 
             if obs_pos is not None and obs_pos.shape[1] > 0:
+                # Build per-env radii — pad to match max_k if needed
+                K = obs_pos.shape[1]
+                all_radii = []
+                for env_id in range(self.num_envs):
+                    radii = self.dynamic_obstacle_manager.get_obstacle_radii(env_id)
+                    k = radii.shape[0]
+                    if k < K:
+                        radii = th.cat([radii, th.zeros(K - k, device=self.device)])
+                    all_radii.append(radii)
+                obs_radii = th.stack(all_radii, dim=0)
+
                 # Compute TTC risk and avoidance direction (differentiable!)
-                risk, risk_grad = compute_ttc_risk(
+                risk, risk_grad = self.ttc_field(
                     self.position, self.velocity,
                     obs_pos, obs_vel,
-                    obstacle_radii=self.dynamic_obstacle_manager.get_obstacle_radii(),
-                    ttc_threshold=self.ttc_field.ttc_threshold,
-                    distance_safe=self.ttc_field.distance_safe,
-                    barrier_beta=self.ttc_field.barrier_beta,
+                    obstacle_radii=obs_radii,
+                    obstacle_mask=obs_mask,
                 )
                 # Risk gradient gives direction AWAY from danger
                 # When risk is low, fall back to target direction
@@ -471,15 +501,19 @@ class DynamicAvoidanceEnv(NavigationEnv):
 
         # --- Risk-weighted yaw ---
         if self.use_dynamic_obstacles and obs_pos is not None and obs_pos.shape[1] > 0:
-            # Direction to nearest/closest obstacle
-            obs_pos_0 = obs_pos[:, 0, :]  # First obstacle
+            # Nearest obstacle (smallest distance to drone, excluding phantoms)
+            distances = th.norm(obs_pos - self.position.unsqueeze(1), dim=2)  # (B, K)
+            if obs_mask is not None:
+                distances = th.where(obs_mask.bool(), distances, th.full_like(distances, float('inf')))
+            nearest_idx = distances.argmin(dim=1)  # (B,)
+            nearest_pos = th.gather(obs_pos, 1, nearest_idx.unsqueeze(1).unsqueeze(2).expand(-1, 1, 3)).squeeze(1)  # (B, 3)
             direction_to_obstacle = F.normalize(
-                obs_pos_0 - self.position, dim=1
+                nearest_pos - self.position, dim=1
             )
 
             # Risk-based weight: higher risk → prioritize looking at obstacle
-            risk_norm = (risk / (risk.max() + 1e-8)).unsqueeze(-1)  # (B, 1)
-            risk_norm = th.clamp(risk_norm, 0.0, 1.0)
+            risk_norm = risk / (risk.max(dim=0, keepdim=True).values + 1e-8)  # per-env independent
+            risk_norm = th.clamp(risk_norm, 0.0, 1.0).unsqueeze(-1)  # (B, 1)
 
             # Confidence-weighted yaw (Innovation 3)
             if self._confidence_proxy is not None and self.use_confidence_proxy:
@@ -514,7 +548,8 @@ class DynamicAvoidanceEnv(NavigationEnv):
 
         # --- New: Risk penalty (Innovation 2) ---
         loss_risk = F.relu(self.ttc_field.ttc_threshold - compute_min_ttc(
-            self.position, self.velocity, obs_pos, obs_vel
+            self.position, self.velocity, obs_pos, obs_vel,
+            obstacle_mask=obs_mask,
         ) if obs_pos is not None and obs_pos.shape[1] > 0 else th.zeros_like(risk))
 
         # --- New: Tracking confidence loss (Innovation 3) ---
@@ -549,7 +584,8 @@ class DynamicAvoidanceEnv(NavigationEnv):
             "risk": risk.clone().detach().cpu(),
             "track_confidence": track_conf.squeeze(-1).clone().detach().cpu(),
             "min_predicted_ttc": compute_min_ttc(
-                self.position, self.velocity, obs_pos, obs_vel
+                self.position, self.velocity, obs_pos, obs_vel,
+                obstacle_mask=obs_mask,
             ).clone().detach().cpu() if (
                 obs_pos is not None and obs_pos.shape[1] > 0
             ) else th.full((self.num_envs,), float('inf')).cpu(),
@@ -562,20 +598,23 @@ class DynamicAvoidanceEnv(NavigationEnv):
             # Use ground truth (stage2): collect from all envs, pad to same K
             all_pos = []
             all_vel = []
+            all_radii = []
             max_k = 0
             for env_id in range(self.num_envs):
                 pos = self.dynamic_obstacle_manager.get_obstacle_positions_gt(env_id)
                 vel = self.dynamic_obstacle_manager.get_obstacle_velocities_gt(env_id)
                 all_pos.append(pos)
                 all_vel.append(vel)
-                max_k = max(max_k, pos.shape[0])
+                k = pos.shape[0]
+                max_k = max(max_k, k)
 
             if max_k == 0:
-                return None, None
+                return None, None, None
 
-            # Pad to uniform K with zeros + mask
+            # Pad to uniform K with zeros; construct per-env mask
             padded_pos = []
             padded_vel = []
+            masks = []
             for env_id in range(self.num_envs):
                 k = all_pos[env_id].shape[0]
                 if k < max_k:
@@ -592,22 +631,28 @@ class DynamicAvoidanceEnv(NavigationEnv):
                     pad_vel = all_vel[env_id]
                 padded_pos.append(pad_pos)
                 padded_vel.append(pad_vel)
+                mask = th.cat([
+                    th.ones(k, device=self.device),
+                    th.zeros(max_k - k, device=self.device)
+                ], dim=0)
+                masks.append(mask)
 
-            return th.stack(padded_pos, dim=0), th.stack(padded_vel, dim=0)
+            pos_stacked = th.stack(padded_pos, dim=0)      # (B, max_k, 3)
+            vel_stacked = th.stack(padded_vel, dim=0)      # (B, max_k, 3)
+            mask_stacked = th.stack(masks, dim=0)           # (B, max_k)
+            return pos_stacked, vel_stacked, mask_stacked
         else:
             # Use perceived/estimated states (stage3/4)
             prediction = self._last_obstacle_prediction
             if prediction is not None:
-                return (
-                    prediction.get("step_1_position", None),
-                    prediction.get("step_1_velocity", None),
-                )
-            # Fallback: use GT but flag it
-            obs_pos = self.dynamic_obstacle_manager.get_obstacle_positions_gt(0)
-            obs_vel = self.dynamic_obstacle_manager.get_obstacle_velocities_gt(0)
-            if obs_pos.shape[0] == 0:
-                return None, None
-            return obs_pos.unsqueeze(0), obs_vel.unsqueeze(0)
+                pos = prediction.get("step_1_position", None)
+                vel = prediction.get("step_1_velocity", None)
+                if pos is not None and vel is not None:
+                    # motion_head outputs (B, 1, 3) after P0-3 fix
+                    B = pos.shape[0]
+                    mask = th.ones(B, 1, device=self.device)
+                    return pos, vel, mask
+            return None, None, None
 
     def close(self):
         """Cleanup resources."""
