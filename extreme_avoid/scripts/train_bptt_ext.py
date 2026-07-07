@@ -107,7 +107,6 @@ def main(args):
     trainer.policy.train()
 
     from tqdm import tqdm
-    from extreme_avoid.vendor.depthnav.common import ExitCode, observation_to_device
 
     exit_code = ExitCode.ERROR
     start_iter = args.start_iter

@@ -14,8 +14,9 @@ Key adaptations from DPTracker original:
   - Output: pooled vector + per-obstacle predictions
 
 Design constraint (per skill.md §2.4):
-  The prompt backbone code from DPTracker is preserved AS-IS in third_party/.
-  This module imports from it, does NOT copy or modify it.
+  The prompt backbone code from DPTracker is preserved and internalized in
+  extreme_avoid/vendor/dptracker/. This module imports from it, does NOT
+  copy or modify it.
 """
 
 import torch as th
@@ -25,7 +26,7 @@ from typing import Optional, Dict
 import sys
 import os
 
-# Dynamic import of DPTracker backbone — requires third_party/ on PYTHONPATH
+# Dynamic import of DPTracker backbone via vendor package
 try:
     from extreme_avoid.vendor.dptracker.layers.illumination_prompter import IlluminationPrompter
     from extreme_avoid.vendor.dptracker.layers.view_prompter import ViewPrompter
@@ -261,17 +262,26 @@ class FusedBackbone(nn.Module):
         max_obstacles: int = 8,
         embedding_dim: int = 64,
         dropout: float = 0.1,
+        use_original_dptracker: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
 
-        # Dual prompters (lightweight by default)
-        self.illum_prompter = LightweightIlluminationPrompter(
-            img_size=img_size, in_chans=in_chans, embed_dim=embed_dim, levels=2
-        )
-        self.view_prompter = LightweightViewPrompter(
-            img_size=img_size, in_chans=in_chans, embed_dim=embed_dim
-        )
+        # Dual prompters — choose between original DPTracker (vendor) or lightweight
+        if use_original_dptracker and _DPTRACKER_AVAILABLE:
+            self.illum_prompter = IlluminationPrompter(
+                img_size=img_size, in_chans=in_chans, embed_dim=embed_dim
+            )
+            self.view_prompter = ViewPrompter(
+                img_size=img_size, in_chans=in_chans, embed_dim=embed_dim
+            )
+        else:
+            self.illum_prompter = LightweightIlluminationPrompter(
+                img_size=img_size, in_chans=in_chans, embed_dim=embed_dim, levels=2
+            )
+            self.view_prompter = LightweightViewPrompter(
+                img_size=img_size, in_chans=in_chans, embed_dim=embed_dim
+            )
 
         # Fusion block
         self.fusion = SimpleFusionBlock(dim=embed_dim, dropout=dropout)
