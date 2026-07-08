@@ -440,12 +440,13 @@ class DynamicAvoidanceEnv(NavigationEnv):
                     dim=1,
                 )
             else:
+                obs_radii = None
                 risk = th.zeros(self.num_envs, device=self.device)
                 risk_grad = th.zeros((self.num_envs, 3), device=self.device)
                 desired_direction = self.target_direction
         else:
             # No dynamic obstacles: use target direction (like parent)
-            obs_pos = obs_vel = obs_mask = None
+            obs_pos = obs_vel = obs_mask = obs_radii = None
             risk = th.zeros(self.num_envs, device=self.device)
             risk_grad = th.zeros((self.num_envs, 3), device=self.device)
             desired_direction = self.target_direction
@@ -591,7 +592,7 @@ class DynamicAvoidanceEnv(NavigationEnv):
             ).clone().detach().cpu() if (
                 obs_pos is not None and obs_pos.shape[1] > 0
             ) else th.full((self.num_envs,), float('inf')).cpu(),
-            "dynamic_collision": self._compute_dynamic_collision_flag(obs_pos).clone().detach().cpu(),
+            "dynamic_collision": self._compute_dynamic_collision_flag(obs_pos, obs_radii).clone().detach().cpu(),
         }
 
         return reward, metrics
@@ -657,17 +658,49 @@ class DynamicAvoidanceEnv(NavigationEnv):
                     return pos, vel, mask
             return None, None, None
 
-    def _compute_dynamic_collision_flag(self, obs_pos: th.Tensor) -> th.Tensor:
-        """Per-step heuristic: is the nearest dynamic obstacle closer than
-        the nearest static collision point?
+    def _compute_dynamic_collision_flag(
+        self, obs_pos: th.Tensor, obs_radii: Optional[th.Tensor] = None
+    ) -> th.Tensor:
+        """Per-step check: has the robot body actually collided with the
+        nearest dynamic obstacle this step?
 
-        Returns (B,) float tensor; 1.0 means the immediate collision threat
-        is from a dynamic obstacle, 0.0 means static geometry is closer.
+        This must use the same physical criterion as the parent's static
+        collision check (`self._collision_dis < self.robot_radius` in
+        base_env.py): a collision happens when the *surface* distance
+        between the robot and the obstacle drops below the robot's radius.
+
+        Previous (buggy) version compared `min_dist_to_dyn` — the raw
+        center-to-center distance to the nearest dynamic obstacle, which
+        does not subtract the obstacle's own radius — against
+        `self.collision_dis`, which is the robot's distance to the nearest
+        *static* surface point. Those two quantities are not the same
+        physical measurement (center-to-center vs. center-to-surface), and
+        `self.collision_dis` is an observation, not a collision threshold —
+        `self.robot_radius` is. That mismatch made this flag systematically
+        under-report dynamic-obstacle collisions whenever the obstacle had a
+        non-trivial radius, and it wasn't even measuring "collision" at all
+        (it was measuring "which is nearer").
+
+        Args:
+            obs_pos: (B, K, 3) obstacle center positions (GT or predicted).
+            obs_radii: (B, K) obstacle radii. If None, obstacles are treated
+                as point masses (radius 0), matching `ttc_field`'s default.
+
+        Returns:
+            (B,) float tensor; 1.0 if the robot body currently overlaps the
+            nearest dynamic obstacle's surface, else 0.0.
         """
         if obs_pos is None or obs_pos.shape[1] == 0:
             return th.zeros(self.num_envs, device=self.device)
-        min_dist_to_dyn = (self.position.unsqueeze(1) - obs_pos).norm(dim=2).min(dim=1).values
-        return (min_dist_to_dyn < self.collision_dis.squeeze()).float()
+
+        center_dist = (self.position.unsqueeze(1) - obs_pos).norm(dim=2)  # (B, K)
+        if obs_radii is not None:
+            surface_dist = center_dist - obs_radii
+        else:
+            surface_dist = center_dist
+        min_surface_dist = surface_dist.min(dim=1).values  # (B,)
+
+        return (min_surface_dist < self.robot_radius).float()
 
     def close(self):
         """Cleanup resources."""
