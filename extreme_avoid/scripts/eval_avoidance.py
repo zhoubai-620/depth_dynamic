@@ -31,6 +31,64 @@ from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInput
 from extreme_avoid.vendor.depthnav.common import observation_to_device, rgba2rgb
 
 
+class ObstacleIdentityTracker:
+    """
+    Cross-frame obstacle identity tracker using embedding cosine similarity.
+
+    Per skill.md §3.13: Measures how reliably the ObstacleHead maintains
+    obstacle identity across consecutive frames. A higher id_switch_rate
+    indicates the perception module is struggling with identity continuity.
+
+    Matching: For each active obstacle in frame t, find the best cosine-similarity
+    match in frame t-1. Obstacles below similarity threshold count as identity
+    failures (switches).
+    """
+
+    def __init__(self, max_obstacles: int = 8, threshold: float = 0.5):
+        self.max_obstacles = max_obstacles
+        self.threshold = threshold
+        self._prev_embeddings = None   # (K, D) — active obstacles from previous frame
+        self._total_switches = 0
+        self._total_tracked = 0
+
+    def update(self, presence, embeddings):
+        """
+        Feed current-frame obstacle outputs and count identity switches.
+
+        Args:
+            presence: (K,) — per-slot presence probability [0, 1].
+            embeddings: (K, D) — per-slot unit-norm embedding vectors.
+        """
+        if presence.dim() == 0:
+            return
+        active_mask = presence > self.threshold
+        if not active_mask.any():
+            self._prev_embeddings = None
+            return
+        active_emb = embeddings[active_mask]          # (K_active, D)
+        K = active_emb.shape[0]
+
+        if self._prev_embeddings is not None and self._prev_embeddings.shape[0] > 0:
+            sim = active_emb @ self._prev_embeddings.T   # (K_active, K_prev)
+            best_sim, _ = sim.max(dim=1)                  # (K_active,)
+            badly_matched = (best_sim <= self.threshold).sum().item()
+            self._total_switches += badly_matched
+            self._total_tracked += K
+
+        self._prev_embeddings = active_emb.detach().clone()
+
+    def reset(self):
+        """Reset tracker state (call at start of each rollout)."""
+        self._prev_embeddings = None
+
+    @property
+    def id_switch_rate(self) -> float:
+        """Fraction of tracked obstacles that failed identity continuity."""
+        if self._total_tracked == 0:
+            return float('nan')
+        return self._total_switches / self._total_tracked
+
+
 class EvaluateDynamicAvoidance(Evaluate):
     """
     Extended evaluator with dynamic obstacle metrics.
@@ -50,6 +108,7 @@ class EvaluateDynamicAvoidance(Evaluate):
         self._id_switches = []
         self._risks = []
         self._track_confs = []
+        self._identity_tracker = ObstacleIdentityTracker(threshold=0.5)
 
     def run_rollouts(
         self,
@@ -63,7 +122,7 @@ class EvaluateDynamicAvoidance(Evaluate):
         base_df["dyn_collision_rate"] = np.mean(self._dynamic_collisions) if self._dynamic_collisions else 0.0
         base_df["min_ttc_mean"] = np.mean(self._min_ttcs) if self._min_ttcs else float('inf')
         base_df["min_ttc_median"] = np.median(self._min_ttcs) if self._min_ttcs else float('inf')
-        base_df["id_switch_rate"] = float('nan')  # Requires ObstacleHead identity tracking (#9)
+        base_df["id_switch_rate"] = self._identity_tracker.id_switch_rate
         base_df["avg_risk"] = np.mean(self._risks) if self._risks else 0.0
         base_df["avg_track_conf"] = np.mean(self._track_confs) if self._track_confs else 0.0
 
@@ -112,16 +171,47 @@ class EvaluateDynamicAvoidance(Evaluate):
         latent_state = th.zeros(
             (self.env.num_envs, self.policy.latent_dim), device=self.policy.device
         )
+        self._identity_tracker.reset()
         while True:
             obs = observation_to_device(self.env.get_observation(), self.policy.device)
-            # FIXED: isinstance instead of type()== to support TrackerFusedPolicy
+            # FIXED: Handle TrackerFusedPolicy extended return (aux_dict for env.get_reward)
+            has_motion = (
+                hasattr(self.policy, '_has_motion_head')
+                and self.policy._has_motion_head
+            )
             if isinstance(self.policy, MultiInputPolicy):
                 if self.policy.is_recurrent:
-                    action, latent_state = self.policy(obs, latent_state)
+                    if has_motion:
+                        action, aux_dict, latent_state = self.policy(
+                            obs, latent_state, return_aux=True
+                        )
+                        if hasattr(self.env, 'set_obstacle_prediction'):
+                            self.env.set_obstacle_prediction(aux_dict)
+                    else:
+                        action, latent_state = self.policy(obs, latent_state)
                 else:
-                    action = self.policy(obs)
+                    if has_motion:
+                        result = self.policy(obs, return_aux=True)
+                        action = result[0]
+                        if hasattr(self.env, 'set_obstacle_prediction'):
+                            self.env.set_obstacle_prediction(result[1])
+                    else:
+                        action = self.policy(obs)
             else:
                 action = self.policy(obs["state"])
+
+            # Track obstacle identity continuity (Innovation 3: id_switch_rate)
+            if hasattr(self.policy, 'last_obstacle_outputs'):
+                obs_out = self.policy.last_obstacle_outputs
+                if obs_out and "presence" in obs_out and "embedding" in obs_out:
+                    presence = obs_out["presence"]
+                    embedding = obs_out["embedding"]
+                    if presence.dim() > 1:
+                        presence = presence.squeeze(0)
+                    if embedding.dim() > 2:
+                        embedding = embedding.squeeze(0)
+                    if presence.shape[0] > 0:
+                        self._identity_tracker.update(presence, embedding)
             obs, reward, terminated, infos = self.env.step(action, is_test=True)
 
             if render:

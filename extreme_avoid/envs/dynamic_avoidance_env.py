@@ -522,10 +522,22 @@ class DynamicAvoidanceEnv(NavigationEnv):
             if self._confidence_proxy is not None and self.use_confidence_proxy:
                 bearing = compute_bearing(self.position, self.yaw_vector, obs_pos)
                 range_ = compute_range(self.position, obs_pos)
-                # Estimate illumination from scene (placeholder)
-                illum = th.ones(self.num_envs, device=self.device) * (
-                    0.3 if self.use_extreme_lighting else 0.8
-                )
+                # Estimate illumination from color sensor (mean pixel intensity, normalized)
+                if hasattr(self, 'sensor_obs'):
+                    color_key = next((k for k in self.sensor_obs if 'color' in k), None)
+                    if color_key is not None and isinstance(self.sensor_obs[color_key], np.ndarray):
+                        color_data = self.sensor_obs[color_key]
+                        mean_intensity = color_data.astype(np.float32).mean()
+                        illum_val = np.clip(mean_intensity / 255.0, 0.01, 1.0)
+                        illum = th.full((self.num_envs,), float(illum_val), device=self.device)
+                    else:
+                        illum = th.full((self.num_envs,),
+                                        0.3 if self.use_extreme_lighting else 0.8,
+                                        device=self.device)
+                else:
+                    illum = th.full((self.num_envs,),
+                                    0.3 if self.use_extreme_lighting else 0.8,
+                                    device=self.device)
                 track_conf = self._confidence_proxy.get_weighted_confidence(
                     bearing, range_, illum
                 )  # (B,)

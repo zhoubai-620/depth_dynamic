@@ -53,70 +53,59 @@ def collect_logs(
         obs = env.reset()
 
         for step in range(max_steps_per_rollout):
-            # Get perception outputs
-            if hasattr(policy, 'feature_extractor') and hasattr(policy.feature_extractor, 'fused_backbone'):
-                color_key = None
-                for k in obs:
-                    if 'color' in k:
-                        color_key = k
-                        break
-                if color_key:
-                    color_img = obs[color_key]
-                    if isinstance(color_img, np.ndarray):
-                        color_img = th.from_numpy(color_img).float() / 255.0
-                        if color_img.dim() == 3:
-                            color_img = color_img.unsqueeze(0)
-                        color_img = color_img.to(policy.device)
+            # Build observation tensors for policy forward
+            obs_device = {
+                k: th.as_tensor(v, device=policy.device).unsqueeze(0) if isinstance(v, np.ndarray)
+                else v for k, v in obs.items()
+            }
 
-                    # Run backbone forward
-                    with th.no_grad():
-                        backbone_out = policy.feature_extractor.fused_backbone(color_img)
-                        obstacle_out = backbone_out["obstacle"]
-                        true_confidence = obstacle_out["confidence"].squeeze(0)  # (K,)
-
-                # Get ground truth obstacle positions
-                if hasattr(env, 'dynamic_obstacle_manager'):
-                    dm = env.dynamic_obstacle_manager
-                    gt_positions = dm.get_obstacle_positions_gt(0)  # (K, 3)
+            with th.no_grad():
+                if policy.is_recurrent:
+                    actions, _ = policy(obs_device)
                 else:
-                    true_confidence = None
-                    gt_positions = None
-                    continue
+                    actions = policy(obs_device)
 
-                if gt_positions is not None and gt_positions.shape[0] > 0:
-                    # Compute bearing and range
-                    drone_pos = env.position[0:1]  # (1, 3)
-                    yaw_vec = env.yaw_vector[0:1]  # (1, 3)
-                    gt_pos_batch = gt_positions.unsqueeze(0)  # (1, K, 3)
+            # Access cached obstacle outputs from policy's public interface
+            obstacle_out = None
+            if hasattr(policy, 'last_obstacle_outputs'):
+                obstacle_out = policy.last_obstacle_outputs
 
-                    bearing = compute_bearing(drone_pos, yaw_vec, gt_pos_batch).squeeze(0)  # (K,)
-                    range_ = compute_range(drone_pos, gt_pos_batch).squeeze(0)  # (K,)
+            true_confidence = None
+            if obstacle_out is not None and "confidence" in obstacle_out:
+                conf_tensor = obstacle_out["confidence"]
+                if conf_tensor.dim() > 1:
+                    conf_tensor = conf_tensor.squeeze(0)
+                true_confidence = conf_tensor
 
-                    # Scene illumination (placeholder — replace with actual sensor reading)
-                    illumination = 0.8  # default indoor level
+            # Get ground truth obstacle positions
+            if hasattr(env, 'dynamic_obstacle_manager'):
+                dm = env.dynamic_obstacle_manager
+                gt_positions = dm.get_obstacle_positions_gt(0)  # (K, 3)
+            else:
+                gt_positions = None
 
-                    for k in range(gt_positions.shape[0]):
-                        logs.append({
-                            "bearing": bearing[k].item(),
-                            "range": range_[k].item(),
-                            "illumination": illumination,
-                            "true_confidence": true_confidence[k].item() if true_confidence is not None else 1.0,
-                            "rollout": rollout_idx,
-                            "step": step,
-                        })
+            if gt_positions is not None and gt_positions.shape[0] > 0:
+                drone_pos = env.position[0:1]  # (1, 3)
+                yaw_vec = env.yaw_vector[0:1]  # (1, 3)
+                gt_pos_batch = gt_positions.unsqueeze(0)  # (1, K, 3)
+
+                bearing = compute_bearing(drone_pos, yaw_vec, gt_pos_batch).squeeze(0)  # (K,)
+                range_ = compute_range(drone_pos, gt_pos_batch).squeeze(0)  # (K,)
+
+                illumination = 0.8  # default indoor level
+
+                for k in range(gt_positions.shape[0]):
+                    conf_val = true_confidence[k].item() if true_confidence is not None and k < len(true_confidence) else 1.0
+                    logs.append({
+                        "bearing": bearing[k].item(),
+                        "range": range_[k].item(),
+                        "illumination": illumination,
+                        "true_confidence": conf_val,
+                        "rollout": rollout_idx,
+                        "step": step,
+                    })
 
             # Step env
-            if policy.is_recurrent:
-                actions, _ = policy({
-                    k: th.as_tensor(v, device=policy.device).unsqueeze(0) if isinstance(v, np.ndarray)
-                    else v for k, v in obs.items()
-                })
-            else:
-                actions = policy({
-                    k: th.as_tensor(v, device=policy.device).unsqueeze(0) if isinstance(v, np.ndarray)
-                    else v for k, v in obs.items()
-                })
-
             obs, reward, done, info = env.step(actions, is_test=True)
             done = done[0] if isinstance(done, th.Tensor) else done
             if done:
