@@ -130,6 +130,9 @@ def main():
     parser.add_argument("--env_config", type=str,
                         default="extreme_avoid/configs/eval_cfg/eval_dynamic.yaml",
                         help="Environment config YAML")
+    parser.add_argument("--policy_cfg_file", type=str,
+                        default="extreme_avoid/configs/policy_cfg/tracker_fused_yaw.yaml",
+                        help="Policy config YAML")
     parser.add_argument("--weight", type=str, default=None, help="Policy checkpoint (optional)")
     parser.add_argument("--num_rollouts", type=int, default=50)
     parser.add_argument("--output", type=str, default="./confidence_logs.csv")
@@ -151,13 +154,25 @@ def main():
     env = env_class(**config["env"])
 
     # Load policy (or create placeholder)
+    # Read policy_kwargs from policy_cfg YAML to construct policy correctly
+    policy_kwargs = {}
+    if os.path.exists(args.policy_cfg_file):
+        with open(args.policy_cfg_file, "r") as f:
+            policy_cfg = yaml.safe_load(f)
+            policy_kwargs = policy_cfg.get("policy", {})
+    else:
+        print(f"Warning: {args.policy_cfg_file} not found. Policy may not be constructed correctly.")
+
     if args.weight and os.path.exists(args.weight):
         policy_class = policy_aliases.get("TrackerFusedPolicy", MultiInputPolicy)
-        policy = policy_class(env.observation_space)
+        if issubclass(policy_class, MultiInputPolicy):
+            policy = policy_class(env.observation_space, **policy_kwargs)
+        else:
+            policy = policy_class(**policy_kwargs)
         policy.load(args.weight)
         policy.eval()
     else:
-        policy = MultiInputPolicy(env.observation_space)
+        policy = MultiInputPolicy(env.observation_space, **policy_kwargs)
         policy.eval()
 
     # Collect logs

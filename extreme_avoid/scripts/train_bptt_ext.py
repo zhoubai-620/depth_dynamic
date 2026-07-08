@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from extreme_avoid.registry import env_aliases, policy_aliases
 from extreme_avoid.scripts.eval_avoidance import EvaluateDynamicAvoidance
 from extreme_avoid.vendor.depthnav.policies.bptt_algorithm import BPTT
+from extreme_avoid.vendor.depthnav.policies.mlp_policy import MlpPolicy
 from extreme_avoid.vendor.depthnav.policies.multi_input_policy import MultiInputPolicy
 from extreme_avoid.vendor.depthnav.common import ExitCode
 
@@ -131,8 +132,13 @@ def main(args):
             for _ in range(trainer.horizon):
                 obs = env.get_observation()
                 
+                # Check if policy is bare MlpPolicy (no feature extractor, takes state tensor directly)
+                if type(trainer.policy) is MlpPolicy:
+                    obs_device = convert_observations_to_device(obs, trainer.policy.device)
+                    actions = trainer.policy(obs_device["state"])
+                    aux_dict = {}
                 # Check if policy supports extended forward (TrackerFusedPolicy)
-                if hasattr(trainer.policy, 'motion_head') and trainer.policy._has_motion_head:
+                elif hasattr(trainer.policy, 'motion_head') and trainer.policy._has_motion_head:
                     obs_device = convert_observations_to_device(obs, trainer.policy.device)
                     if trainer.policy.is_recurrent:
                         actions, aux_dict, latent_state = trainer.policy(obs_device, latent_state, return_aux=True)

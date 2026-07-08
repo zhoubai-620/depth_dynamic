@@ -74,8 +74,8 @@ train_bptt:
 policy_class: "MlpPolicy"
 
 policy:
+  in_dim: 7
   net_arch:
-    pi: [256, 128]
-    vf: [256, 128]
+    mlp_layer: [256, 128, 4]
   activation_fn: "relu"
-  output_activation_fn: "tanh"
+  output_activation_fn: "acceleration_bounded_yaw"

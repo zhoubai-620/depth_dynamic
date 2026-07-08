@@ -103,8 +103,7 @@ policy:
       class: "LayerNormGRUCell"
       kwargs:
         hidden_size: 256
-    pi: [256, 128]
-    vf: [256, 128]
+    mlp_layer: [256, 128, 4]
     concatenate: true
     depth:
       kernel_size: [5, 3, 3]
@@ -134,7 +133,7 @@ policy:
       prediction_horizon: 5
       dropout: 0.1
   activation_fn: "relu"
-  output_activation_fn: "tanh"
+  output_activation_fn: "acceleration_bounded_yaw"
   feature_extractor_class: "TrackerFusedExtractor"
   feature_extractor_kwargs:
     net_arch:

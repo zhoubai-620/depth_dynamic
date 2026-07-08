@@ -14,8 +14,7 @@ policy:
         hidden_size: 256
 
     # Policy network (after feature extraction + recurrent)
-    pi: [256, 128]
-    vf: [256, 128]
+    mlp_layer: [256, 128, 4]
 
     # Feature fusion mode: concatenate or elementwise add
     concatenate: true
@@ -59,7 +58,7 @@ policy:
 
   # Activation functions
   activation_fn: "relu"
-  output_activation_fn: "tanh"
+  output_activation_fn: "acceleration_bounded_yaw"
 
   # Feature extractor kwargs (passed to TrackerFusedExtractor)
   feature_extractor_kwargs:
