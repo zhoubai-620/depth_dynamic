@@ -83,11 +83,11 @@ class FusedBackbone(nn.Module):
         illum_feat = self.illum_prompter(image)
         view_feat = self.view_prompter(image)
 
-        fused = view_feat
+        x, z = view_feat, illum_feat
         for block in self.adaptor_blocks:
-            fused = block(fused, illum_feat)
+            x, z = block(x, z)
 
-        fused_pooled = fused.mean(dim=1)
+        fused_pooled = x.mean(dim=1)
 
         obstacle_outputs = self.obstacle_head(fused_pooled)
         features = self.output_proj(fused_pooled)
