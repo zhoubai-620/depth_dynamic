@@ -44,14 +44,14 @@ def load_data(csv_path: str, batch_size: int = 256):
     X, y = X[valid], y[valid]
     print(f"After filtering: {len(y)} valid samples")
 
-    # Normalize inputs
-    X_mean = X.mean(axis=0, keepdims=True)
-    X_std = X.std(axis=0, keepdims=True) + 1e-6
-    X_norm = (X - X_mean) / X_std
-
+    # NOTE: No external normalization here — ConfidenceProxy.forward() applies
+    # its own internal normalization (bearing/pi, tanh(range/10), illum.clamp).
+    # Standardizing here would create a "double normalization" mismatch between
+    # offline fitting and online inference (DynamicAvoidanceEnv.get_reward()),
+    # where inputs are passed as raw physical quantities directly.
     # Split: 80% train, 20% val
     split = int(0.8 * len(y))
-    X_train, X_val = X_norm[:split], X_norm[split:]
+    X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
 
     train_data = TensorDataset(th.from_numpy(X_train), th.from_numpy(y_train))
@@ -60,8 +60,8 @@ def load_data(csv_path: str, batch_size: int = 256):
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
 
-    # Store normalization stats for model save
-    norm_stats = {"X_mean": X_mean, "X_std": X_std}
+    # norm_stats retained for record-keeping only (no longer used in forward)
+    norm_stats = {"note": "unused — ConfidenceProxy.forward() handles normalization internally"}
 
     return train_loader, val_loader, norm_stats
 

@@ -526,10 +526,11 @@ class DynamicAvoidanceEnv(NavigationEnv):
                 if hasattr(self, 'sensor_obs'):
                     color_key = next((k for k in self.sensor_obs if 'color' in k), None)
                     if color_key is not None and isinstance(self.sensor_obs[color_key], np.ndarray):
-                        color_data = self.sensor_obs[color_key]
-                        mean_intensity = color_data.astype(np.float32).mean()
-                        illum_val = np.clip(mean_intensity / 255.0, 0.01, 1.0)
-                        illum = th.full((self.num_envs,), float(illum_val), device=self.device)
+                        color_data = self.sensor_obs[color_key]  # (num_envs, C, H, W)
+                        per_env_mean = color_data.reshape(color_data.shape[0], -1).astype(np.float32).mean(axis=1)
+                        illum = th.as_tensor(
+                            np.clip(per_env_mean / 255.0, 0.01, 1.0), device=self.device, dtype=th.float32
+                        )
                     else:
                         illum = th.full((self.num_envs,),
                                         0.3 if self.use_extreme_lighting else 0.8,
@@ -565,7 +566,7 @@ class DynamicAvoidanceEnv(NavigationEnv):
         loss_risk = F.relu(self.ttc_field.ttc_threshold - compute_min_ttc(
             self.position, self.velocity, obs_pos, obs_vel,
             obstacle_mask=obs_mask,
-        ) if obs_pos is not None and obs_pos.shape[1] > 0 else th.zeros_like(risk))
+        ) if obs_pos is not None and obs_pos.shape[1] > 0 else th.zeros_like(risk)).pow(2)
 
         # --- New: Tracking confidence loss (Innovation 3) ---
         # Penalize low tracking confidence when risk is present

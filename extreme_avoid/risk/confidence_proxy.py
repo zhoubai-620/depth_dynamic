@@ -94,7 +94,12 @@ class ConfidenceProxy(nn.Module):
         bearing_norm = bearing / (th.pi + 1e-8)           # [-1, 1]
         range_norm = th.tanh(range_ / 10.0)                 # compress [0, inf] → [0, ~1]
         illum = illumination.unsqueeze(-1).expand(-1, K) if illumination.dim() == 1 else illumination
-        illum_norm = illum / (illum.max() + 1e-8)           # [0, 1]
+        # illum is already in [0.01, 1.0] physical range (clipped upstream in
+        # dynamic_avoidance_env.py). Batch-internal normalization (illum / illum.max())
+        # would map the same absolute illumination level to different normalized
+        # values depending on batch composition, breaking train/inference consistency.
+        # Use a simple clamp instead of any batch-dependent normalization.
+        illum_norm = illum.clamp(0.0, 1.0)                # already in [0.01, 1.0] range
 
         # Concatenate features: (B, K, 3)
         features = th.stack([bearing_norm, range_norm, illum_norm], dim=-1)

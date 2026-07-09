@@ -10,6 +10,7 @@ Verifies:
 
 import sys
 import os
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -22,6 +23,7 @@ except ImportError:
     print("habitat-sim not available — skipping scene-dependent integration tests")
 
 
+@pytest.mark.skipif(not HABITAT_AVAILABLE, reason="habitat-sim not installed")
 def test_registry_imports():
     """Registry imports and extends alias dictionaries."""
     from extreme_avoid.registry import env_aliases, policy_aliases
@@ -35,6 +37,7 @@ def test_registry_imports():
     print(f"PASS registry imports: env_aliases has {len(env_aliases)} entries")
 
 
+@pytest.mark.skipif(not HABITAT_AVAILABLE, reason="habitat-sim not installed")
 def test_env_class_instantiatable():
     """DynamicAvoidanceEnv can be imported and type-checked."""
     from extreme_avoid.envs.dynamic_avoidance_env import DynamicAvoidanceEnv

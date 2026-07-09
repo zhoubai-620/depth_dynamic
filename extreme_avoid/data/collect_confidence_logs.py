@@ -92,7 +92,13 @@ def collect_logs(
                 bearing = compute_bearing(drone_pos, yaw_vec, gt_pos_batch).squeeze(0)  # (K,)
                 range_ = compute_range(drone_pos, gt_pos_batch).squeeze(0)  # (K,)
 
-                illumination = 0.8  # default indoor level
+                # Read real illumination from color sensor (match dynamic_avoidance_env.py logic)
+                color_key = next((k for k in env.sensor_obs if 'color' in k), None)
+                if color_key is not None and isinstance(env.sensor_obs[color_key], np.ndarray):
+                    color_data = env.sensor_obs[color_key]
+                    illumination = float(np.clip(color_data.astype(np.float32).mean() / 255.0, 0.01, 1.0))
+                else:
+                    illumination = 0.8  # fallback default indoor level
 
                 for k in range(gt_positions.shape[0]):
                     conf_val = true_confidence[k].item() if true_confidence is not None and k < len(true_confidence) else 1.0
