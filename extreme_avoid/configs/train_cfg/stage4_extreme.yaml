@@ -177,3 +177,4 @@ policy:
         max_obstacles: 6
         embedding_dim: 64
         dropout: 0.1
+        pretrained_checkpoint: null  # 填实际 DPTracker checkpoint 路径

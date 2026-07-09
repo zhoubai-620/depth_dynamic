@@ -36,6 +36,7 @@ class FusedBackbone(nn.Module):
         embedding_dim: int = 64,
         dropout: float = 0.1,
         num_adaptor_blocks: int = 1,
+        pretrained_checkpoint: str = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -69,6 +70,12 @@ class FusedBackbone(nn.Module):
             nn.LayerNorm(embed_dim),
             nn.Linear(embed_dim, embed_dim),
         )
+
+        # Load DPTracker pretrained weights if checkpoint path provided.
+        # Only illum_prompter and view_prompter weights are loaded;
+        # obstacle_head and output_proj remain randomly initialized (per skill.md §2.4).
+        if pretrained_checkpoint is not None:
+            self.load_pretrained_prompters(pretrained_checkpoint)
 
     def forward(
         self,

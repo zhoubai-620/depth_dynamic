@@ -114,6 +114,7 @@ class TrackerFusedExtractor(ImageExtractor):
             max_obstacles=backbone_kwargs.get("max_obstacles", 8),
             embedding_dim=backbone_kwargs.get("embedding_dim", 64),
             dropout=backbone_kwargs.get("dropout", 0.1),
+            pretrained_checkpoint=backbone_kwargs.get("pretrained_checkpoint", None),
         )
         backbone_features_dim = self.fused_backbone.embed_dim
 
